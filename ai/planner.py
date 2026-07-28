@@ -197,8 +197,10 @@ class TaskPlanner:
             )
 
         except Exception as error:
+            print(f"[AI planner error] {error}")
             return TaskPlan.empty(
-                f"The AI planner failed: {error}"
+                "Gemini is temporarily unavailable. Your local tools and "
+                "profile still work. Try again shortly."
             )
 
         return self.validate_plan(

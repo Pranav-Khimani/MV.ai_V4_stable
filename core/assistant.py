@@ -139,12 +139,6 @@ class Assistant:
             )
 
     
-        stage("Loading memory")
-        memory_context = self.get_memory_context()
-        conversation_context = (
-            self.get_recent_conversation_context()
-        )
-        
         self.save_conversation_message(
             role="user",
             content=command,
@@ -153,6 +147,30 @@ class Assistant:
         if cancellation_token is not None:
             cancellation_token.raise_if_cancelled()
 
+        # Profile questions are answered directly from user_profile.json.
+        # They remain available even when Gemini or the internet is down.
+        stage("Checking local profile")
+        local_profile_answer = self.user_profile.answer_query(command)
+
+        if local_profile_answer is not None:
+            report = ExecutionReport(
+                goal="Answer from editable user profile",
+                success=True,
+                completed_steps=0,
+                total_steps=0,
+                message=local_profile_answer,
+            )
+            self.save_report_to_memory(
+                command=command,
+                report=report,
+            )
+            return report
+
+        stage("Loading memory")
+        memory_context = self.get_memory_context()
+        conversation_context = (
+            self.get_recent_conversation_context()
+        )
 
         print("\n[Long-term memory context]")
         print(memory_context)
@@ -172,10 +190,11 @@ class Assistant:
 
         if not plan.steps:
             has_answer = bool(plan.message.strip())
+            is_ai_error = self.is_ai_error_message(plan.message)
 
             report = ExecutionReport(
                 goal=plan.goal,
-                success=has_answer,
+                success=(has_answer and not is_ai_error),
                 completed_steps=0,
                 total_steps=0,
                 message=(
@@ -217,6 +236,24 @@ class Assistant:
         )
 
         return report
+
+    @staticmethod
+    def is_ai_error_message(message: str) -> bool:
+        """Return True when a no-step plan contains an AI service error."""
+
+        normalized = str(message).strip().lower()
+        if not normalized:
+            return False
+
+        markers = (
+            "gemini is temporarily unavailable",
+            "gemini is not configured",
+            "gemini request failed",
+            "could not initialize gemini",
+            "all available gemini models failed",
+            "the ai planner failed",
+        )
+        return any(marker in normalized for marker in markers)
 
     def get_memory_context(
         self,

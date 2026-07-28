@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from typing import Any
 
 from dotenv import load_dotenv
@@ -15,16 +16,7 @@ load_dotenv()
 
 
 class GeminiProvider(AIProvider):
-    """
-    Connects MV.AI to Gemini.
-
-    Features:
-    - Discovers models available to the API key.
-    - Uses preferred models first.
-    - Automatically switches models on quota limits,
-      temporary server failures, or empty/invalid responses.
-    - Converts Gemini JSON into TaskPlan objects.
-    """
+    """Connect MV.ai to Gemini with retries and model fallback."""
 
     PREFERRED_MODELS = [
         "gemini-3-flash-preview",
@@ -33,172 +25,68 @@ class GeminiProvider(AIProvider):
         "gemini-2.5-flash-lite",
     ]
 
-    RETRYABLE_STATUS_CODES = {
-    404,
-    429,
-    500,
-    502,
-    503,
-    504,
-}
-    BLOCKED_MODEL_WORDS = (
-        "embedding",
-        "image",
-        "imagen",
-        "tts",
-        "audio",
-        "live",
-        "veo",
-        "robotics",
+    RETRY_DELAYS_SECONDS = (0.0, 1.0, 2.0)
+    TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504}
+    SWITCH_MODEL_STATUS_CODES = {404}
+
+    SERVICE_UNAVAILABLE_MESSAGE = (
+        "Gemini is temporarily unavailable. Your local tools and profile "
+        "still work. Try again shortly."
     )
 
     def __init__(self):
         self.client = None
-        self.model_name = None
-        self.available_models: list[str] = []
-        self.initialization_error = None
+        self.available_models = list(self.PREFERRED_MODELS)
+        self.model_name = self.available_models[0]
+        self.initialization_error: str | None = None
         self.last_fallback_message = ""
 
-        api_key = os.getenv("GEMINI_API_KEY")
-
+        api_key = os.getenv("GEMINI_API_KEY", "").strip()
         if not api_key:
+            self.model_name = None
+            self.available_models = []
             self.initialization_error = (
-                "GEMINI_API_KEY was not found in the .env file."
+                "Gemini is not configured. Add GEMINI_API_KEY to your "
+                "local .env file. Your local tools and profile still work."
             )
             return
 
         try:
-            self.client = genai.Client(
-                api_key=api_key,
-            )
-
-            self.model_name = self.choose_model()
-
+            # Creating the client is local. Do not list every model during
+            # startup: that network call can return 503 and disable MV.ai
+            # before the user even sends a command.
+            self.client = genai.Client(api_key=api_key)
         except Exception as error:
             self.client = None
             self.model_name = None
             self.available_models = []
-
-            self.initialization_error = (
-                f"Could not initialize Gemini: {error}"
-            )
+            self.initialization_error = self.friendly_error_message(error)
+            print(f"[Gemini initialization error] {error}")
 
     def choose_model(self) -> str:
-        """
-        Discover compatible models and build the fallback chain.
-        """
-
-        if self.client is None:
-            raise RuntimeError(
-                "Gemini client has not been initialized."
-            )
-
-        discovered_models: list[str] = []
-
-        for model in self.client.models.list():
-            model_name = getattr(
-                model,
-                "name",
-                "",
-            )
-
-            if not model_name:
-                continue
-
-            model_name = model_name.removeprefix(
-                "models/"
-            )
-
-            lowered_name = model_name.lower()
-
-            if "gemini" not in lowered_name:
-                continue
-
-            if any(
-                blocked_word in lowered_name
-                for blocked_word in self.BLOCKED_MODEL_WORDS
-            ):
-                continue
-
-            supported_actions = getattr(
-                model,
-                "supported_actions",
-                None,
-            )
-
-            if supported_actions:
-                normalized_actions = {
-                    str(action).replace("_", "").lower()
-                    for action in supported_actions
-                }
-
-                if "generatecontent" not in normalized_actions:
-                    continue
-
-            if model_name not in discovered_models:
-                discovered_models.append(model_name)
-
-        ordered_models: list[str] = []
-
-        # Put preferred models first.
-        for preferred_model in self.PREFERRED_MODELS:
-            if (
-                preferred_model in discovered_models
-                and preferred_model not in ordered_models
-            ):
-                ordered_models.append(
-                    preferred_model
-                )
-
-        # Add every other compatible Gemini model afterward.
-        for model_name in sorted(discovered_models):
-            if model_name not in ordered_models:
-                ordered_models.append(model_name)
-
-        self.available_models = ordered_models
+        """Return the current preferred model without a startup API call."""
 
         if not self.available_models:
-            raise RuntimeError(
-                "No compatible Gemini text model is available "
-                "for this API key."
-            )
-
+            raise RuntimeError("No Gemini fallback models are configured.")
         return self.available_models[0]
 
-    def generate_plan(
-        self,
-        command: str,
-    ) -> TaskPlan:
-        """
-        Convert a natural-language request into a TaskPlan.
-
-        If one model reaches a rate limit or temporary failure,
-        the next available model is tried automatically.
-        """
+    def generate_plan(self, command: str) -> TaskPlan:
+        """Generate a plan, retrying transient errors before model fallback."""
 
         command = command.strip()
-
         if not command:
-            return TaskPlan.empty(
-                "Please enter a task."
-            )
+            return TaskPlan.empty("Please enter a task.")
 
-        if (
-            self.client is None
-            or self.model_name is None
-            or not self.available_models
-        ):
+        if self.client is None or not self.available_models:
             return TaskPlan.empty(
                 self.initialization_error
-                or "Gemini is not available."
+                or self.SERVICE_UNAVAILABLE_MESSAGE
             )
 
         self.last_fallback_message = ""
-
-        last_error = None
         attempted_models: list[str] = []
+        last_error: Exception | None = None
 
-        # Start with the model that last succeeded.
         model_candidates = [
             self.model_name,
             *[
@@ -207,156 +95,169 @@ class GeminiProvider(AIProvider):
                 if model != self.model_name
             ],
         ]
+        model_candidates = [model for model in model_candidates if model]
 
         for model_name in model_candidates:
             attempted_models.append(model_name)
 
-            try:
-                response = (
-                    self.client.models.generate_content(
+            for attempt_index, delay_seconds in enumerate(
+                self.RETRY_DELAYS_SECONDS,
+                start=1,
+            ):
+                if delay_seconds:
+                    print(
+                        f"[Gemini retry] Waiting {delay_seconds:.0f}s before "
+                        f"attempt {attempt_index} with {model_name}."
+                    )
+                    time.sleep(delay_seconds)
+
+                try:
+                    response = self.client.models.generate_content(
                         model=model_name,
                         contents=command,
                         config=types.GenerateContentConfig(
                             system_instruction=SYSTEM_PROMPT,
                             temperature=0,
-                            response_mime_type=(
-                                "application/json"
-                            ),
+                            response_mime_type="application/json",
                         ),
                     )
-                )
 
-                response_text = getattr(
-                    response,
-                    "text",
-                    None,
-                )
+                    response_text = getattr(response, "text", None)
+                    if not response_text:
+                        raise RuntimeError(
+                            f"{model_name} returned an empty response."
+                        )
 
-                if not response_text:
-                    last_error = RuntimeError(
-                        f"{model_name} returned an empty response."
+                    try:
+                        raw_plan = json.loads(response_text)
+                    except json.JSONDecodeError as error:
+                        raise RuntimeError(
+                            f"{model_name} returned invalid JSON."
+                        ) from error
+
+                    self.model_name = model_name
+                    return self.parse_task_plan(raw_plan)
+
+                except errors.APIError as error:
+                    last_error = error
+                    status_code = self.get_status_code(error)
+
+                    if status_code in self.SWITCH_MODEL_STATUS_CODES:
+                        self.record_fallback(
+                            model_name,
+                            self.describe_error(error),
+                        )
+                        break
+
+                    if self.is_retryable_error(error):
+                        if attempt_index < len(self.RETRY_DELAYS_SECONDS):
+                            self.record_retry(
+                                model_name,
+                                attempt_index,
+                                self.describe_error(error),
+                            )
+                            continue
+
+                        self.record_fallback(
+                            model_name,
+                            self.describe_error(error),
+                        )
+                        break
+
+                    print(f"[Gemini request error] {model_name}: {error}")
+                    return TaskPlan.empty(
+                        self.friendly_error_message(error)
                     )
 
-                    self.record_fallback(
-                        model_name,
-                        "empty response",
-                    )
-
-                    continue
-
-                try:
-                    raw_plan = json.loads(
-                        response_text
-                    )
-
-                except json.JSONDecodeError as error:
+                except Exception as error:
                     last_error = error
 
-                    self.record_fallback(
-                        model_name,
-                        "invalid JSON",
+                    if self.is_retryable_error(error):
+                        if attempt_index < len(self.RETRY_DELAYS_SECONDS):
+                            self.record_retry(
+                                model_name,
+                                attempt_index,
+                                self.describe_error(error),
+                            )
+                            continue
+
+                        self.record_fallback(
+                            model_name,
+                            self.describe_error(error),
+                        )
+                        break
+
+                    # Empty or malformed responses can be model-specific, so
+                    # switch models after the retry sequence.
+                    error_text = str(error).lower()
+                    if "empty response" in error_text or "invalid json" in error_text:
+                        if attempt_index < len(self.RETRY_DELAYS_SECONDS):
+                            self.record_retry(
+                                model_name,
+                                attempt_index,
+                                self.describe_error(error),
+                            )
+                            continue
+                        self.record_fallback(
+                            model_name,
+                            self.describe_error(error),
+                        )
+                        break
+
+                    print(f"[Gemini request error] {model_name}: {error}")
+                    return TaskPlan.empty(
+                        self.friendly_error_message(error)
                     )
 
-                    continue
-
-                # Remember whichever model successfully responded.
-                self.model_name = model_name
-
-                return self.parse_task_plan(
-                    raw_plan
-                )
-
-            except errors.APIError as error:
-                last_error = error
-
-                if self.is_retryable_error(error):
-                    self.record_fallback(
-                        model_name,
-                        self.describe_error(error),
-                    )
-
-                    continue
-
-                return TaskPlan.empty(
-                    f"Gemini request failed using "
-                    f"{model_name}: {error}"
-                )
-
-            except Exception as error:
-                last_error = error
-
-                if self.is_retryable_error(error):
-                    self.record_fallback(
-                        model_name,
-                        self.describe_error(error),
-                    )
-
-                    continue
-
-                return TaskPlan.empty(
-                    f"Gemini request failed using "
-                    f"{model_name}: {error}"
-                )
-
-        attempted_text = ", ".join(
-            attempted_models
+        print(
+            "[Gemini unavailable] Models tried: "
+            + ", ".join(attempted_models)
         )
+        if last_error is not None:
+            print(f"[Gemini unavailable] Last error: {last_error}")
 
-        return TaskPlan.empty(
-            "All available Gemini models failed.\n"
-            f"Models tried: {attempted_text}\n"
-            f"Last error: {last_error}"
-        )
+        return TaskPlan.empty(self.SERVICE_UNAVAILABLE_MESSAGE)
 
-    def record_fallback(
+    def record_retry(
         self,
         model_name: str,
+        attempt_number: int,
         reason: str,
     ) -> None:
-        """
-        Save fallback information and print it for debugging.
-        """
+        next_delay = self.RETRY_DELAYS_SECONDS[attempt_number]
+        print(
+            f"[Gemini retry] {model_name} failed because of {reason}. "
+            f"Retrying in {next_delay:.0f}s..."
+        )
 
+    def record_fallback(self, model_name: str, reason: str) -> None:
         message = (
             f"{model_name} failed because of {reason}. "
             "Trying the next model..."
         )
-
         self.last_fallback_message = message
+        print(f"[Gemini fallback] {message}")
 
-        print(
-            f"[Gemini fallback] {message}"
-        )
+    @classmethod
+    def get_status_code(cls, error: Exception) -> int | None:
+        code = getattr(error, "code", None)
+        try:
+            return int(code) if code is not None else None
+        except (TypeError, ValueError):
+            return None
 
-    def is_retryable_error(
-        self,
-        error: Exception,
-    ) -> bool:
-        """
-        Return True for errors where switching models may help.
-        """
-
-        status_code = getattr(
-            error,
-            "code",
-            None,
-        )
-
-        if status_code in self.RETRYABLE_STATUS_CODES:
+    @classmethod
+    def is_retryable_error(cls, error: Exception) -> bool:
+        status_code = cls.get_status_code(error)
+        if status_code in cls.TRANSIENT_STATUS_CODES:
             return True
 
         error_text = str(error).lower()
-
         retryable_phrases = (
-            "404",
-            "not found",
-            "no longer available",
-            "newer model",
             "429",
             "resource_exhausted",
             "resource exhausted",
             "rate limit",
-            "rate_limit",
             "quota",
             "too many requests",
             "500",
@@ -371,48 +272,51 @@ class GeminiProvider(AIProvider):
             "timed out",
             "connection error",
             "connection reset",
+            "connection aborted",
         )
+        return any(phrase in error_text for phrase in retryable_phrases)
 
-        return any(
+    @classmethod
+    def friendly_error_message(cls, error: Exception) -> str:
+        status_code = cls.get_status_code(error)
+        error_text = str(error).lower()
+
+        if status_code in cls.TRANSIENT_STATUS_CODES or cls.is_retryable_error(error):
+            return cls.SERVICE_UNAVAILABLE_MESSAGE
+
+        if status_code in {401, 403} or any(
             phrase in error_text
-            for phrase in retryable_phrases
+            for phrase in (
+                "api key not valid",
+                "invalid api key",
+                "permission denied",
+                "unauthenticated",
+            )
+        ):
+            return (
+                "Gemini authentication failed. Check GEMINI_API_KEY in your "
+                "local .env file. Your local tools and profile still work."
+            )
+
+        return (
+            "Gemini could not complete that request. Your local tools and "
+            "profile still work. Try again shortly."
         )
 
-    @staticmethod
-    def describe_error(
-        error: Exception,
-    ) -> str:
-        """
-        Produce a short fallback reason.
-        """
-
-        status_code = getattr(
-            error,
-            "code",
-            None,
-        )
+    @classmethod
+    def describe_error(cls, error: Exception) -> str:
+        status_code = cls.get_status_code(error)
 
         if status_code == 429:
             return "a rate limit or quota limit"
+        if status_code in {500, 502, 503, 504}:
+            return f"a temporary server error ({status_code})"
+        if status_code == 404:
+            return "the model is unavailable (404)"
 
-        if status_code in {
-            500,
-            502,
-            503,
-            504,
-        }:
-            return (
-                f"a temporary server error "
-                f"({status_code})"
-            )
-
-        error_text = str(error)
-
+        error_text = str(error).strip() or error.__class__.__name__
         if len(error_text) > 150:
-            error_text = (
-                error_text[:147] + "..."
-            )
-
+            error_text = error_text[:147] + "..."
         return error_text
 
     def parse_task_plan(

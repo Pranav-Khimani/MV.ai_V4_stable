@@ -62,6 +62,7 @@ class VoiceAssistant:
         # cleanly if SAPI hangs or voice mode is turned off.
         self._speech_process: subprocess.Popen | None = None
         self._speech_process_lock = threading.RLock()
+        self._speech_reset_event = threading.Event()
 
         self.awake_until = 0.0
         self.command_timeout_seconds = 8
@@ -372,6 +373,7 @@ class VoiceAssistant:
         if not clean_text:
             return
 
+        self._speech_reset_event.clear()
         print(f"[VOICE] Queued: {clean_text}")
         self.speech_queue.put(clean_text)
 
@@ -412,9 +414,10 @@ class VoiceAssistant:
 
             except Exception as error:
                 print(f"[VOICE ERROR] {error}")
-                self.send_message(
-                    f"Speech output failed and was reset: {error}"
-                )
+                if not self._speech_reset_event.is_set():
+                    self.send_message(
+                        f"Speech output failed and was reset: {error}"
+                    )
 
             finally:
                 self.speaking_event.clear()
@@ -425,6 +428,24 @@ class VoiceAssistant:
                     self.set_status("Listening for Hey MV")
 
         print("[VOICE] Speech worker stopped")
+
+    def reset_after_error(self) -> None:
+        """Cancel queued speech and immediately return to listening mode."""
+
+        self._speech_reset_event.set()
+        self.cancel_current_speech()
+
+        while True:
+            try:
+                self.speech_queue.get_nowait()
+            except queue.Empty:
+                break
+            else:
+                self.speech_queue.task_done()
+
+        self.speaking_event.clear()
+        if self.running_event.is_set():
+            self.set_status("Listening for Hey MV")
 
     def cancel_current_speech(self) -> None:
         """Stop a hung Windows speech process, if one exists."""

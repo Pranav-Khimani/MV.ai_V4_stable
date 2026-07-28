@@ -1924,13 +1924,9 @@ class MVWindow(QMainWindow):
                 "error",
             )
 
-            if (
-                self.voice_enabled
-                and self.voice_assistant is not None
-            ):
-                self.voice_assistant.speak(
-                    "Sorry, I could not complete that task."
-                )
+            # Do not speak failure messages. Speaking an API error can leave
+            # the status stuck on SPEAKING// while the service is unavailable.
+            self.reset_voice_after_error()
 
     def display_command_error(
         self,
@@ -1943,13 +1939,8 @@ class MVWindow(QMainWindow):
             "error",
         )
 
-        if (
-            self.voice_enabled
-            and self.voice_assistant is not None
-        ):
-            self.voice_assistant.speak(
-                "Sorry, the task failed."
-            )
+        # Errors stay visible in the chat but are not read aloud.
+        self.reset_voice_after_error()
 
     # --------------------------------------------------
     # Progress and confirmation
@@ -2319,6 +2310,21 @@ class MVWindow(QMainWindow):
                     "MIC//OFF",
                     self.MUTED,
                 )
+
+    def reset_voice_after_error(self) -> None:
+        """Return voice mode to listening without speaking the error."""
+
+        if self.voice_assistant is not None:
+            try:
+                self.voice_assistant.reset_after_error()
+            except Exception as error:
+                print(f"[VOICE RESET WARNING] {error}")
+
+        if self.voice_enabled:
+            self.set_status(
+                "LISTENING//HEY MV",
+                self.SUCCESS,
+            )
 
     @staticmethod
     def prepare_spoken_response(
