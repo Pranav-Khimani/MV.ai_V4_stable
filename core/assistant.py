@@ -1,7 +1,7 @@
 from ai.gemini import GeminiProvider
 from ai.planner import TaskPlanner
 
-from core.app_paths import get_memory_database_path
+from core.app_paths import get_memory_database_path, get_project_root
 from core.executor import ExecutionReport, TaskExecutor
 from core.permissions import PermissionManager
 from core.plugin_loader import discover_tools
@@ -10,6 +10,7 @@ from core.task_manager import CancellationToken
 
 from memory.memory_manager import MemoryManager
 from memory.reality_manager import RealityManager
+from memory.user_profile import UserProfile
 
 
 class Assistant:
@@ -48,7 +49,11 @@ class Assistant:
             self.memory
         )
 
+        profile_path = get_project_root() / "user_profile.json"
+        self.user_profile = UserProfile(profile_path)
+
         print(f"[Memory database] {database_path}")
+        print(f"[Editable user profile] {profile_path}")
 
     def load_tools(self) -> None:
         """
@@ -218,11 +223,16 @@ class Assistant:
         limit: int = 8,
     ) -> str:
         """
-        Return MV.AI's long-term memories as prompt context.
+        Return the editable profile and database memories as prompt context.
+
+        user_profile.json is re-read for every command, so manual edits are
+        available immediately without changing Python code or restarting MV.ai.
         """
 
+        profile_context = self.user_profile.get_context()
+
         try:
-            return self.memory.get_memory_context(
+            database_context = self.memory.get_memory_context(
                 limit=limit
             )
         except Exception as error:
@@ -230,9 +240,15 @@ class Assistant:
                 "[Memory warning] Could not load "
                 f"long-term memory: {error}"
             )
-            return (
-                "Long-term memory is currently unavailable."
+            database_context = (
+                "Dynamic long-term memory is currently unavailable."
             )
+
+        return (
+            f"{profile_context}\n\n"
+            "DYNAMIC LONG-TERM MEMORY:\n"
+            f"{database_context}"
+        )
 
     def get_recent_conversation_context(
         self,
@@ -477,6 +493,7 @@ class Assistant:
                 "memory_count": len(memories),
                 "recent_command_count": len(commands),
                 "recent_message_count": len(messages),
+                "user_profile": self.user_profile.get_status(),
             }
         except Exception as error:
             return {

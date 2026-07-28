@@ -38,3 +38,6 @@ cache/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# User-owned editable MV.ai profile
+user_profile.json

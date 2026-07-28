@@ -1,0 +1,26 @@
+{
+  "_instructions": "Edit the values below and save the file. Keep valid JSON. Do not store passwords, API keys, bank details, or other secrets here.",
+  "personal": {
+    "name": "Pranav",
+    "nickname": "Multiverse",
+    "preferred_name": "Multiverse",
+    "age": null,
+    "birthday": ""
+  },
+  "education": {
+    "role": "Student",
+    "grade_or_year": "",
+    "school_or_college": ""
+  },
+  "preferences": {
+    "preferred_editor": "VS Code",
+    "diet": "",
+    "communication_style": ""
+  },
+  "projects": {
+    "main_project": "MV.ai",
+    "company": "GNOSIS"
+  },
+  "devices": {},
+  "custom": {}
+}
