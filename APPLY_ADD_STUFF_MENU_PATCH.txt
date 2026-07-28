@@ -1,0 +1,14 @@
+MV.ai V4 - Compact ADD Stuff Menu
+
+1. Fully close MV.ai.
+2. Copy the ui folder from this patch into your working MV.ai_V4 folder.
+3. Choose Replace files in the destination.
+4. Keep .env, .venv, user_profile.json, and your database unchanged.
+5. Start MV.ai with RUN_MVAI.bat.
+
+Changes:
+- Replaces the wide ADD Stuff! button with a small circular + button.
+- Clicking + opens a compact popup above the composer.
+- The popup contains the Add files action.
+- Clicking outside closes the popup automatically.
+- Image selection, preview, storage, and analysis are unchanged.

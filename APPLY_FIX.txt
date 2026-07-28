@@ -1,0 +1,15 @@
+MV.ai V4 — ADD Stuff popup + voice recovery fix
+
+1. Fully close MV.ai.
+2. Copy the ui and voice folders, the test Python file, and the BAT file
+   into the root of your working MV.ai_V4 folder.
+3. Choose Replace files in the destination.
+4. Keep .env, .venv, user_profile.json, and your database untouched.
+5. Run TEST_ADD_STUFF_VOICE_FIX.bat.
+6. Start MV.ai with RUN_MVAI.bat.
+
+Changes:
+- ADD Stuff menu now has a clearly visible opaque panel and button background.
+- Temporary Google speech-recognition failures show VOICE//RETRYING.
+- Voice automatically returns to LISTENING//HEY MV after a transient failure.
+- Repeated service-error diagnostics are throttled to avoid terminal spam.

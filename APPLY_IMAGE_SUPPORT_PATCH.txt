@@ -1,0 +1,15 @@
+MV.ai V4 — Vision Input v0.1 Patch
+==================================
+
+1. Fully close MV.ai.
+2. Make a backup of your working MV.ai_V4 folder.
+3. Extract this ZIP.
+4. Copy everything INSIDE MV.ai_V4_IMAGE_ANALYSIS_PATCH into your working MV.ai_V4 folder.
+5. Choose "Replace files in the destination".
+6. Do not delete or replace your .env, .venv, user_profile.json, or AppData database.
+7. Run TEST_IMAGE_SUPPORT.bat.
+8. Start MV.ai with RUN_MVAI.bat.
+
+The visible attachment button is named exactly: ADD Stuff!
+
+This patch adds image analysis only. Image generation and editing are not included yet.

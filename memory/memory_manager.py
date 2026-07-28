@@ -1,3 +1,4 @@
+import json
 import uuid
 from datetime import datetime
 from typing import Any
@@ -505,6 +506,7 @@ class MemoryManager:
         self,
         role: str,
         content: str,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> int:
         """
         Store a user, assistant, or system message.
@@ -524,11 +526,14 @@ class MemoryManager:
             )
 
         content = content.strip()
+        attachments = attachments or []
 
-        if not content:
+        if not content and not attachments:
             raise ValueError(
-                "Conversation content cannot be empty."
+                "Conversation content and attachments cannot both be empty."
             )
+
+        attachments_json = json.dumps(attachments, ensure_ascii=False)
 
         message_id = self.database.execute(
             """
@@ -536,15 +541,17 @@ class MemoryManager:
                 session_id,
                 role,
                 content,
-                created_at
+                created_at,
+                attachments_json
             )
-            VALUES (?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?)
             """,
             (
                 self.session_id,
                 normalized_role,
                 content,
                 self.now(),
+                attachments_json,
             ),
         )
 
@@ -593,6 +600,16 @@ class MemoryManager:
         )
 
         messages.reverse()
+
+        for message in messages:
+            raw_attachments = message.get("attachments_json") or "[]"
+            try:
+                attachments = json.loads(raw_attachments)
+                if not isinstance(attachments, list):
+                    attachments = []
+            except (TypeError, json.JSONDecodeError):
+                attachments = []
+            message["attachments"] = attachments
 
         return messages
 

@@ -3,6 +3,7 @@ from ai.planner import TaskPlanner
 from ai.prompts import build_system_prompt
 
 from core.app_paths import get_memory_database_path, get_project_root
+from core.media_store import MediaStore
 from core.executor import ExecutionReport, TaskExecutor
 from core.permissions import PermissionManager
 from core.plugin_loader import discover_tools
@@ -60,6 +61,7 @@ class Assistant:
 
         profile_path = get_project_root() / "user_profile.json"
         self.user_profile = UserProfile(profile_path)
+        self.media_store = MediaStore()
 
         print(f"[Memory database] {database_path}")
         print(f"[Editable user profile] {profile_path}")
@@ -246,6 +248,95 @@ class Assistant:
 
         return report
 
+    def import_image_attachment(
+        self,
+        source_path: str,
+    ) -> dict:
+        """Copy a selected image into MV.ai's private media directory."""
+
+        return self.media_store.store_image(source_path).to_dict()
+
+    def handle_image_command(
+        self,
+        command: str,
+        attachment: dict,
+        cancellation_token: CancellationToken | None = None,
+        stage_callback=None,
+    ) -> ExecutionReport:
+        """Answer a question about one attached image without using the tool planner."""
+
+        command = command.strip() or "Describe this image and its important details."
+
+        def stage(name: str, current: int = 0, total: int = 0, detail=None) -> None:
+            if callable(stage_callback):
+                stage_callback(name, current, total, detail)
+
+        if cancellation_token is not None:
+            cancellation_token.raise_if_cancelled()
+
+        image_path = self.media_store.resolve_path(attachment)
+        if image_path is None:
+            return ExecutionReport(
+                goal="Analyze attached image",
+                success=False,
+                completed_steps=0,
+                total_steps=0,
+                message="The attached image is no longer available.",
+            )
+
+        # Load prior context before saving the current request so the image
+        # question is not repeated twice in the Gemini prompt.
+        profile_context = self.user_profile.get_context()
+        conversation_context = self.get_recent_conversation_context(limit=4)
+
+        self.save_conversation_message(
+            role="user",
+            content=command,
+            attachments=[attachment],
+        )
+
+        if cancellation_token is not None:
+            cancellation_token.raise_if_cancelled()
+
+        stage("Analyzing image")
+        vision_prompt = (
+            f"USER REQUEST:\n{command}\n\n"
+            f"USER PROFILE CONTEXT:\n{profile_context}\n\n"
+            f"RECENT CONVERSATION CONTEXT:\n{conversation_context}"
+        )
+
+        response = self.ai_provider.analyze_image(
+            image_path=image_path,
+            prompt=vision_prompt,
+            mime_type=str(attachment.get("mime_type", "")),
+        )
+
+        if cancellation_token is not None:
+            cancellation_token.raise_if_cancelled()
+
+        normalized_response = response.strip().lower()
+        local_vision_errors = (
+            "the attached image is no longer available",
+            "mv.ai could not read the attached image",
+            "the attached image is empty",
+            "mv.ai vision currently supports",
+        )
+        success = (
+            bool(response.strip())
+            and not self.is_ai_error_message(response)
+            and not any(marker in normalized_response for marker in local_vision_errors)
+        )
+        report = ExecutionReport(
+            goal="Analyze attached image",
+            success=success,
+            completed_steps=1 if success else 0,
+            total_steps=1,
+            message=response,
+        )
+        stage("Saving result")
+        self.save_report_to_memory(command=command, report=report)
+        return report
+
     @staticmethod
     def is_ai_error_message(message: str) -> bool:
         """Return True when a no-step plan contains an AI service error."""
@@ -257,6 +348,8 @@ class Assistant:
         markers = (
             "gemini is temporarily unavailable",
             "gemini is not configured",
+            "gemini authentication failed",
+            "gemini could not complete that request",
             "gemini request failed",
             "could not initialize gemini",
             "all available gemini models failed",
@@ -333,6 +426,7 @@ class Assistant:
         self,
         role: str,
         content: str,
+        attachments: list[dict] | None = None,
     ) -> None:
         """
         Save one conversation message safely.
@@ -345,6 +439,7 @@ class Assistant:
             self.memory.add_conversation_message(
                 role=role,
                 content=content,
+                attachments=attachments,
             )
 
             if role.strip().lower() == "user":

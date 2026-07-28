@@ -799,9 +799,10 @@ class MorePopup(QDialog):
         layout.addWidget(
             self._section(
                 "AI requests",
-                "When Gemini handles a request, the command and selected "
-                "relevant context can be sent to Google's Gemini service. "
-                "Local profile commands can still work without Gemini.",
+                "When Gemini handles a request, the command, selected "
+                "relevant context, and any image you attach can be sent to "
+                "Google's Gemini service. Local profile commands can still "
+                "work without Gemini.",
             )
         )
         layout.addWidget(

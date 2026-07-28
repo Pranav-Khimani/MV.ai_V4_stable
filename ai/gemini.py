@@ -1,6 +1,8 @@
 import json
+import mimetypes
 import os
 import time
+from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
@@ -32,6 +34,13 @@ class GeminiProvider(AIProvider):
     SERVICE_UNAVAILABLE_MESSAGE = (
         "Gemini is temporarily unavailable. Your local tools and profile "
         "still work. Try again shortly."
+    )
+
+    VISION_SYSTEM_PROMPT = (
+        "You are MV.ai's visual analysis system. Examine the attached image "
+        "carefully and answer the user's exact question. Be clear about "
+        "uncertainty, do not invent unreadable text or hidden details, and "
+        "keep the response practical and concise unless detail is requested."
     )
 
     def __init__(self, system_prompt: str | None = None):
@@ -70,6 +79,115 @@ class GeminiProvider(AIProvider):
         if not self.available_models:
             raise RuntimeError("No Gemini fallback models are configured.")
         return self.available_models[0]
+
+    def analyze_image(
+        self,
+        image_path: str | Path,
+        prompt: str,
+        mime_type: str | None = None,
+    ) -> str:
+        """Analyze one local image with retry and model fallback."""
+
+        if self.client is None or not self.available_models:
+            return self.initialization_error or self.SERVICE_UNAVAILABLE_MESSAGE
+
+        path = Path(image_path).expanduser().resolve()
+        if not path.exists() or not path.is_file():
+            return "The attached image is no longer available."
+
+        selected_mime = (mime_type or mimetypes.guess_type(path.name)[0] or "").lower()
+        if selected_mime not in {"image/png", "image/jpeg", "image/webp"}:
+            return "MV.ai Vision currently supports PNG, JPG, JPEG, and WebP images."
+
+        try:
+            image_bytes = path.read_bytes()
+        except OSError:
+            return "MV.ai could not read the attached image."
+
+        if not image_bytes:
+            return "The attached image is empty."
+
+        prompt = prompt.strip() or "Describe this image and point out its most important details."
+        image_part = types.Part.from_bytes(
+            data=image_bytes,
+            mime_type=selected_mime,
+        )
+
+        model_candidates = [
+            self.model_name,
+            *[model for model in self.available_models if model != self.model_name],
+        ]
+        model_candidates = [model for model in model_candidates if model]
+        last_error: Exception | None = None
+
+        for model_name in model_candidates:
+            for attempt_index, delay_seconds in enumerate(
+                self.RETRY_DELAYS_SECONDS,
+                start=1,
+            ):
+                if delay_seconds:
+                    time.sleep(delay_seconds)
+
+                try:
+                    response = self.client.models.generate_content(
+                        model=model_name,
+                        # Google recommends placing the text after a single image.
+                        contents=[image_part, prompt],
+                        config=types.GenerateContentConfig(
+                            system_instruction=self.VISION_SYSTEM_PROMPT,
+                            temperature=0.2,
+                        ),
+                    )
+                    response_text = str(getattr(response, "text", "") or "").strip()
+                    if not response_text:
+                        raise RuntimeError(f"{model_name} returned an empty response.")
+
+                    self.model_name = model_name
+                    return response_text
+
+                except errors.APIError as error:
+                    last_error = error
+                    status_code = self.get_status_code(error)
+
+                    if status_code in self.SWITCH_MODEL_STATUS_CODES:
+                        self.record_fallback(model_name, self.describe_error(error))
+                        break
+
+                    if self.is_retryable_error(error):
+                        if attempt_index < len(self.RETRY_DELAYS_SECONDS):
+                            self.record_retry(
+                                model_name,
+                                attempt_index,
+                                self.describe_error(error),
+                            )
+                            continue
+                        self.record_fallback(model_name, self.describe_error(error))
+                        break
+
+                    print(f"[Gemini vision error] {model_name}: {error}")
+                    return self.friendly_error_message(error)
+
+                except Exception as error:
+                    last_error = error
+                    error_text = str(error).lower()
+                    retryable = self.is_retryable_error(error) or "empty response" in error_text
+                    if retryable:
+                        if attempt_index < len(self.RETRY_DELAYS_SECONDS):
+                            self.record_retry(
+                                model_name,
+                                attempt_index,
+                                self.describe_error(error),
+                            )
+                            continue
+                        self.record_fallback(model_name, self.describe_error(error))
+                        break
+
+                    print(f"[Gemini vision error] {model_name}: {error}")
+                    return self.friendly_error_message(error)
+
+        if last_error is not None:
+            print(f"[Gemini vision unavailable] Last error: {last_error}")
+        return self.SERVICE_UNAVAILABLE_MESSAGE
 
     def generate_plan(self, command: str) -> TaskPlan:
         """Generate a plan, retrying transient errors before model fallback."""

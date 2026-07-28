@@ -130,6 +130,20 @@ class MemoryDatabase:
                     """
                 )
 
+                # Older MV.ai databases predate media attachments. Add the
+                # column in-place so existing memories and Realities remain intact.
+                columns = {
+                    row["name"]
+                    for row in connection.execute(
+                        "PRAGMA table_info(conversations)"
+                    ).fetchall()
+                }
+                if "attachments_json" not in columns:
+                    connection.execute(
+                        "ALTER TABLE conversations "
+                        "ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]'"
+                    )
+
                 connection.commit()
 
     def execute(

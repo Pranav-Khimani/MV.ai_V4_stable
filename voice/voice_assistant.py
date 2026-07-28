@@ -67,6 +67,12 @@ class VoiceAssistant:
         self.awake_until = 0.0
         self.command_timeout_seconds = 8
 
+        # Avoid leaving the UI in a permanent error state when Google's
+        # speech-recognition endpoint has a short network/service failure.
+        self._last_recognition_service_message = 0.0
+        self._recognition_message_cooldown_seconds = 20.0
+        self._recognition_retry_delay_seconds = 1.5
+
     # --------------------------------------------------
     # Starting and stopping
     # --------------------------------------------------
@@ -200,16 +206,34 @@ class VoiceAssistant:
             return
 
         except sr.RequestError as error:
-            self.set_status("Speech service unavailable")
-            self.send_message(
-                f"Speech recognition service error: {error}"
-            )
+            # This usually means a brief network/API failure, not a broken
+            # microphone. Show a retry state, throttle repeated diagnostics,
+            # then return to wake-word listening automatically.
+            self.set_status("Speech service retrying")
+
+            now = time.monotonic()
+            if (
+                now - self._last_recognition_service_message
+                >= self._recognition_message_cooldown_seconds
+            ):
+                self.send_message(
+                    "Speech recognition is temporarily unavailable; "
+                    "MV.ai will keep retrying automatically. "
+                    f"Details: {error}"
+                )
+                self._last_recognition_service_message = now
+
+            time.sleep(self._recognition_retry_delay_seconds)
+            self.restore_listening_status()
             return
 
         except Exception as error:
+            self.set_status("Voice retrying")
             self.send_message(
-                f"Speech recognition failed: {error}"
+                f"Speech recognition failed and will retry: {error}"
             )
+            time.sleep(0.5)
+            self.restore_listening_status()
             return
 
         normalized_text = self.normalize_text(text)
@@ -218,6 +242,15 @@ class VoiceAssistant:
             return
 
         self.process_recognized_text(normalized_text)
+
+    def restore_listening_status(self) -> None:
+        """Return to the normal wake-word state after a transient error."""
+
+        if (
+            self.running_event.is_set()
+            and not self.speaking_event.is_set()
+        ):
+            self.set_status("Listening for Hey MV")
 
     # --------------------------------------------------
     # Wake phrase logic

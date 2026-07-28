@@ -16,6 +16,7 @@ from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
+    QFileDialog,
     QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
@@ -32,6 +33,7 @@ from PySide6.QtWidgets import (
 
 from core.assistant import Assistant
 from core.task_manager import TaskManager
+from ui.widgets.image_attachment import ChatImageWidget, ImageAttachmentPreview
 from ui.widgets.more_popup import MorePopup
 from ui.widgets.reality_dock_button import RealityDockButton
 from ui.widgets.recent_realities_popup import RecentRealitiesPopup
@@ -287,6 +289,7 @@ class MessageBubble(QFrame):
         self,
         message: str,
         bubble_type: str = "assistant",
+        image_path: str | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -332,6 +335,9 @@ class MessageBubble(QFrame):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 13, 18, 13)
+
+        if image_path:
+            layout.addWidget(ChatImageWidget(image_path))
 
         self.message_label = QLabel(message)
         self.message_label.setWordWrap(True)
@@ -403,6 +409,8 @@ class MVWindow(QMainWindow):
         self.thinking_loader = None
         self.active_animations = []
         self.message_bubbles: list[MessageBubble] = []
+        self.pending_image_path: str | None = None
+        self.pending_image_details: dict | None = None
 
         # Only one Recent Realities panel may exist.
         self.recent_realities_popup = None
@@ -1071,6 +1079,7 @@ class MVWindow(QMainWindow):
             popup.accept()
 
         self.clear_visible_reality()
+        self.clear_pending_image()
         self.chat_started = False
         self.command_entry.clear()
         self.show_welcome_screen()
@@ -1133,6 +1142,7 @@ class MVWindow(QMainWindow):
             return
 
         self.clear_visible_reality()
+        self.clear_pending_image()
         self.command_entry.clear()
 
         if not messages:
@@ -1152,8 +1162,17 @@ class MVWindow(QMainWindow):
                 message.get("content")
                 or ""
             ).strip()
+            attachments = message.get("attachments") or []
+            image_path = None
+            for attachment in attachments:
+                if attachment.get("kind") != "image":
+                    continue
+                resolved = self.assistant.media_store.resolve_path(attachment)
+                if resolved is not None:
+                    image_path = str(resolved)
+                    break
 
-            if not content:
+            if not content and image_path is None:
                 continue
 
             bubble_type = (
@@ -1165,6 +1184,7 @@ class MVWindow(QMainWindow):
             self.add_message(
                 content,
                 bubble_type,
+                image_path=image_path,
             )
 
         self.scroll_to_bottom()
@@ -1222,6 +1242,7 @@ class MVWindow(QMainWindow):
             return
 
         self.clear_visible_reality()
+        self.clear_pending_image()
 
         self.chat_started = False
         self.command_entry.clear()
@@ -1258,23 +1279,60 @@ class MVWindow(QMainWindow):
             """
         )
 
-        layout = QHBoxLayout(wrapper)
-        layout.setContentsMargins(
-            14,
-            7,
-            9,
-            7,
+        outer_layout = QVBoxLayout(wrapper)
+        outer_layout.setContentsMargins(12, 8, 9, 8)
+        outer_layout.setSpacing(7)
+
+        self.image_attachment_preview = ImageAttachmentPreview()
+        self.image_attachment_preview.remove_requested.connect(
+            self.clear_pending_image
         )
+        outer_layout.addWidget(self.image_attachment_preview)
+
+        input_row = QFrame()
+        input_row.setStyleSheet("background: transparent; border: none;")
+        layout = QHBoxLayout(input_row)
+        layout.setContentsMargins(2, 0, 0, 0)
         layout.setSpacing(7)
 
+        self.add_stuff_popup = None
+
+        self.add_stuff_button = QPushButton("+")
+        self.add_stuff_button.setObjectName("addStuffButton")
+        self.add_stuff_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.add_stuff_button.setFixedSize(46, 46)
+        self.add_stuff_button.setToolTip("Add stuff")
+        self.add_stuff_button.clicked.connect(self.toggle_add_stuff_popup)
+        self.add_stuff_button.setStyleSheet(
+            f"""
+            QPushButton#addStuffButton {{
+                background: #1B2030;
+                color: {self.TEXT};
+                border: 1px solid #30374C;
+                border-radius: 23px;
+                font-size: 25px;
+                font-weight: 400;
+                padding-bottom: 3px;
+            }}
+            QPushButton#addStuffButton:hover {{
+                background: #252C40;
+                border-color: {self.ACCENT};
+            }}
+            QPushButton#addStuffButton:pressed {{
+                background: #2B3248;
+            }}
+            QPushButton#addStuffButton:disabled {{
+                background: #171A24;
+                color: #686D7B;
+                border-color: #252936;
+            }}
+            """
+        )
+
         self.command_entry = QLineEdit()
-        self.command_entry.setPlaceholderText(
-            self.PLACEHOLDER
-        )
+        self.command_entry.setPlaceholderText(self.PLACEHOLDER)
         self.command_entry.setMinimumHeight(48)
-        self.command_entry.returnPressed.connect(
-            self.send_command
-        )
+        self.command_entry.returnPressed.connect(self.send_command)
         self.command_entry.setStyleSheet(
             f"""
             QLineEdit {{
@@ -1285,24 +1343,14 @@ class MVWindow(QMainWindow):
                 font-size: 15px;
                 selection-background-color: {self.ACCENT};
             }}
-
-            QLineEdit::placeholder {{
-                color: {self.MUTED};
-            }}
+            QLineEdit::placeholder {{ color: {self.MUTED}; }}
             """
         )
 
         self.microphone_button = QPushButton("🎙")
-        self.microphone_button.setCursor(
-            Qt.CursorShape.PointingHandCursor
-        )
-        self.microphone_button.setFixedSize(
-            48,
-            48,
-        )
-        self.microphone_button.clicked.connect(
-            self.microphone_clicked
-        )
+        self.microphone_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.microphone_button.setFixedSize(48, 48)
+        self.microphone_button.clicked.connect(self.microphone_clicked)
         self.microphone_button.setStyleSheet(
             f"""
             QPushButton {{
@@ -1312,24 +1360,14 @@ class MVWindow(QMainWindow):
                 border-radius: 24px;
                 font-size: 18px;
             }}
-
-            QPushButton:hover {{
-                background: #252C40;
-            }}
+            QPushButton:hover {{ background: #252C40; }}
             """
         )
 
         self.send_button = QPushButton("➤")
-        self.send_button.setCursor(
-            Qt.CursorShape.PointingHandCursor
-        )
-        self.send_button.setFixedSize(
-            48,
-            48,
-        )
-        self.send_button.clicked.connect(
-            self.send_or_cancel
-        )
+        self.send_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.send_button.setFixedSize(48, 48)
+        self.send_button.clicked.connect(self.send_or_cancel)
         self.send_button.setStyleSheet(
             f"""
             QPushButton {{
@@ -1340,11 +1378,7 @@ class MVWindow(QMainWindow):
                 font-size: 19px;
                 font-weight: 700;
             }}
-
-            QPushButton:hover {{
-                background: {self.ACCENT_HOVER};
-            }}
-
+            QPushButton:hover {{ background: {self.ACCENT_HOVER}; }}
             QPushButton:disabled {{
                 background: #343643;
                 color: #989BA7;
@@ -1352,18 +1386,161 @@ class MVWindow(QMainWindow):
             """
         )
 
-        layout.addWidget(
-            self.command_entry,
-            1,
-        )
-        layout.addWidget(
-            self.microphone_button
-        )
-        layout.addWidget(
-            self.send_button
+        layout.addWidget(self.add_stuff_button)
+        layout.addWidget(self.command_entry, 1)
+        layout.addWidget(self.microphone_button)
+        layout.addWidget(self.send_button)
+        outer_layout.addWidget(input_row)
+        return wrapper
+
+    def toggle_add_stuff_popup(self) -> None:
+        """Open or close the compact ADD Stuff menu."""
+
+        if self.is_working:
+            self.set_status("WAIT//TASK ACTIVE", self.WARNING)
+            return
+
+        if self.add_stuff_popup is not None and self.add_stuff_popup.isVisible():
+            self.close_add_stuff_popup()
+            return
+
+        self.show_add_stuff_popup()
+
+    def show_add_stuff_popup(self) -> None:
+        """Show a small action popup directly above the + button."""
+
+        self.close_add_stuff_popup()
+
+        popup = QFrame()
+        popup.setObjectName("addStuffPopup")
+        popup.setWindowFlags(
+            Qt.WindowType.Popup
+            | Qt.WindowType.FramelessWindowHint
         )
 
-        return wrapper
+        # A translucent top-level frame can cause Qt to paint only the
+        # child text, making the menu look like it has no background.
+        # Force stylesheet-backed, opaque painting for the popup panel.
+        popup.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        popup.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        popup.setAutoFillBackground(True)
+        popup.setFixedSize(196, 64)
+        popup.setStyleSheet(
+            f"""
+            QFrame#addStuffPopup {{
+                background-color: #171C29;
+                border: 1px solid #343C53;
+                border-radius: 16px;
+            }}
+            QPushButton#addFilesAction {{
+                background-color: #1D2332;
+                color: {self.TEXT};
+                border: 1px solid #2D354A;
+                border-radius: 11px;
+                padding: 0 14px;
+                text-align: left;
+                font-size: 14px;
+                font-weight: 600;
+            }}
+            QPushButton#addFilesAction:hover {{
+                background-color: #282F43;
+                border-color: {self.ACCENT};
+            }}
+            QPushButton#addFilesAction:pressed {{
+                background-color: #30384E;
+            }}
+            """
+        )
+
+        popup_layout = QVBoxLayout(popup)
+        popup_layout.setContentsMargins(8, 8, 8, 8)
+        popup_layout.setSpacing(0)
+
+        add_files_button = QPushButton("＋   Add files")
+        add_files_button.setObjectName("addFilesAction")
+        add_files_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        add_files_button.setFixedHeight(46)
+        add_files_button.clicked.connect(self.choose_files_from_popup)
+        popup_layout.addWidget(add_files_button)
+
+        popup.adjustSize()
+        anchor = self.add_stuff_button.mapToGlobal(
+            self.add_stuff_button.rect().topLeft()
+        )
+        popup.move(
+            anchor.x(),
+            max(8, anchor.y() - popup.height() - 10),
+        )
+
+        self.add_stuff_popup = popup
+        popup.destroyed.connect(self.on_add_stuff_popup_destroyed)
+        popup.show()
+        popup.raise_()
+        add_files_button.setFocus()
+
+    def choose_files_from_popup(self) -> None:
+        """Close the action popup, then open the image file picker."""
+
+        self.close_add_stuff_popup()
+        QTimer.singleShot(0, self.choose_stuff)
+
+    def close_add_stuff_popup(self) -> None:
+        popup = self.add_stuff_popup
+        self.add_stuff_popup = None
+        if popup is not None:
+            popup.close()
+            popup.deleteLater()
+
+    def on_add_stuff_popup_destroyed(self, *_args) -> None:
+        self.add_stuff_popup = None
+
+    def choose_stuff(self) -> None:
+        """Choose one image and stage it for the next message."""
+
+        if self.is_working:
+            self.set_status("WAIT//TASK ACTIVE", self.WARNING)
+            return
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Add stuff to MV.ai",
+            str(Path.home()),
+            "Images (*.png *.jpg *.jpeg *.webp)",
+        )
+        if not file_path:
+            return
+
+        try:
+            details = self.assistant.media_store.inspect_image(file_path)
+            self.image_attachment_preview.set_image(
+                details["path"],
+                details["size_bytes"],
+            )
+        except Exception as error:
+            QMessageBox.warning(self, "Could not add image", str(error))
+            self.clear_pending_image()
+            return
+
+        self.pending_image_path = str(details["path"])
+        self.pending_image_details = details
+        self.command_entry.setPlaceholderText(
+            "Ask MV.ai anything about this image..."
+        )
+        self.command_entry.setFocus()
+        self.set_status("IMAGE//READY", self.ACCENT)
+
+    def clear_pending_image(self) -> None:
+        self.pending_image_path = None
+        self.pending_image_details = None
+        if hasattr(self, "image_attachment_preview"):
+            self.image_attachment_preview.clear()
+        if hasattr(self, "command_entry"):
+            self.command_entry.setPlaceholderText(self.PLACEHOLDER)
+        if not self.is_working and hasattr(self, "status_label"):
+            if self.voice_enabled:
+                self.set_status("LISTENING//HEY MV", self.SUCCESS)
+            else:
+                self.set_status("MIC//OFF", self.MUTED)
 
     # --------------------------------------------------
     # Logo
@@ -1443,6 +1620,7 @@ class MVWindow(QMainWindow):
         self,
         message: str,
         message_type: str = "assistant",
+        image_path: str | None = None,
     ):
         self.hide_welcome_screen()
 
@@ -1462,6 +1640,7 @@ class MVWindow(QMainWindow):
         bubble = MessageBubble(
             message=message,
             bubble_type=message_type,
+            image_path=image_path,
         )
         bubble.setFixedWidth(
             self.calculate_message_bubble_width()
@@ -1693,29 +1872,42 @@ class MVWindow(QMainWindow):
         if self.is_working:
             return
 
-        command = (
-            self.command_entry
-            .text()
-            .strip()
-        )
+        command = self.command_entry.text().strip()
+        has_image = bool(self.pending_image_path)
 
-        if not command:
+        if not command and not has_image:
             return
+        if not command:
+            command = "Describe this image and point out its most important details."
+
+        attachment = None
+        if has_image:
+            try:
+                attachment = self.assistant.import_image_attachment(
+                    self.pending_image_path
+                )
+            except Exception as error:
+                QMessageBox.warning(self, "Could not add image", str(error))
+                return
 
         self.command_entry.clear()
 
-        self.add_message(
-            command,
-            "user",
-        )
+        if attachment is not None:
+            self.add_message(
+                command,
+                "user",
+                image_path=attachment.get("path"),
+            )
+            self.clear_pending_image()
+        else:
+            self.add_message(command, "user")
 
-        self.start_command_task(
-            command
-        )
+        self.start_command_task(command, attachment=attachment)
 
     def start_command_task(
         self,
         command: str,
+        attachment: dict | None = None,
     ) -> None:
         self.set_working_state(True)
         self.show_thinking_loader()
@@ -1724,6 +1916,14 @@ class MVWindow(QMainWindow):
             cancellation_token,
             progress_callback,
         ):
+            if attachment is not None:
+                return self.assistant.handle_image_command(
+                    command=command,
+                    attachment=attachment,
+                    cancellation_token=cancellation_token,
+                    stage_callback=progress_callback,
+                )
+
             return self.assistant.handle_command(
                 command=command,
                 confirmation_callback=self.request_confirmation,
@@ -1740,11 +1940,7 @@ class MVWindow(QMainWindow):
                 stage_callback=progress_callback,
             )
 
-        self.active_task_id = (
-            self.task_manager.start(
-                run_command
-            )
-        )
+        self.active_task_id = self.task_manager.start(run_command)
 
     def cancel_active_task(self) -> None:
         if self.task_manager.cancel(
@@ -2201,7 +2397,13 @@ class MVWindow(QMainWindow):
 
         lowered = status.lower()
 
-        if "error" in lowered or "unavailable" in lowered:
+        if "unavailable" in lowered or "retrying" in lowered:
+            # Network speech-recognition failures are normally temporary.
+            # The voice worker retries and restores listening automatically.
+            display_text = "VOICE//RETRYING"
+            color = self.WARNING
+
+        elif "error" in lowered:
             display_text = "VOICE//ERROR"
             color = self.ERROR
 
@@ -2273,6 +2475,10 @@ class MVWindow(QMainWindow):
         self.command_entry.setEnabled(
             not working
         )
+        if hasattr(self, "add_stuff_button"):
+            self.add_stuff_button.setEnabled(not working)
+        if hasattr(self, "image_attachment_preview"):
+            self.image_attachment_preview.remove_button.setEnabled(not working)
         self.send_button.setEnabled(True)
         self.send_button.setText(
             "■" if working else "➤"
