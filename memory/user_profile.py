@@ -50,6 +50,52 @@ class UserProfile:
 
         return data
 
+    def save(self, data: dict[str, Any]) -> None:
+        """Validate and atomically save the editable profile object.
+
+        Writing through a temporary file prevents a partial write from
+        corrupting ``user_profile.json`` if the application is interrupted.
+        """
+
+        if not isinstance(data, dict):
+            raise ValueError(
+                "The editable profile must be one JSON object at its root."
+            )
+
+        try:
+            payload = json.dumps(
+                data,
+                ensure_ascii=False,
+                indent=2,
+            ) + "\n"
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                f"The editable profile contains an unsupported value: {error}"
+            ) from error
+
+        encoded = payload.encode("utf-8")
+        if len(encoded) > self.MAX_FILE_BYTES:
+            raise ValueError(
+                "user_profile.json is too large. Keep it below 64 KB."
+            )
+
+        self.profile_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = self.profile_path.with_suffix(
+            self.profile_path.suffix + ".tmp"
+        )
+
+        try:
+            temporary_path.write_bytes(encoded)
+            temporary_path.replace(self.profile_path)
+        except OSError as error:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise ValueError(
+                f"Could not save user_profile.json: {error}"
+            ) from error
+
     def answer_query(self, query: str) -> str | None:
         """Answer common profile questions locally, without calling Gemini.
 

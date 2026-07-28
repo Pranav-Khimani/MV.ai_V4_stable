@@ -1,0 +1,13 @@
+MV.ai V4 - Editable Profile Tab
+================================
+
+1. Fully close MV.ai.
+2. Copy the contents of this patch into your working MV.ai_V4 folder.
+3. Choose "Replace files in the destination".
+4. Do NOT replace or delete .env, .venv, or user_profile.json.
+5. Run TEST_PROFILE_EDITOR.bat.
+6. Start MV.ai with RUN_MVAI.bat.
+
+Open More (...) > Profile. Edit the fields, add custom facts, then press
+"Save profile". MV.ai re-reads user_profile.json for every request, so the
+saved facts work immediately without a restart.
