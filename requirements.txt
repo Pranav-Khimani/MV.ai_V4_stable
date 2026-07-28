@@ -1,0 +1,9 @@
+PySide6
+python-dotenv
+google-genai
+SpeechRecognition
+PyAudio
+psutil
+pycaw
+screen-brightness-control
+cryptography

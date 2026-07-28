@@ -1,0 +1,40 @@
+# Secrets — never commit or package these
+.env
+.env.*
+!.env.example
+secrets.properties
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Build output
+build/
+dist/
+*.egg-info/
+
+# MV.ai local runtime data
+data/
+logs/
+backups/
+cache/
+*.db
+*.db-shm
+*.db-wal
+*.log
+
+# Editors / OS
+.vscode/*.log
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

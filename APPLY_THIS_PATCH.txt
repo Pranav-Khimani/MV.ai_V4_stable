@@ -1,0 +1,21 @@
+MV.ai V4 - Voice Freeze Fix
+
+This patch fixes Windows text-to-speech getting stuck after partially speaking a reply.
+
+INSTALL:
+1. Fully close MV.ai.
+2. Extract this ZIP.
+3. Copy the "voice" and "ui" folders into your working MV.ai_V4 project folder.
+4. Choose "Replace the files in the destination".
+5. Do not replace or delete your .env or .venv.
+6. Start MV.ai with RUN_MVAI.bat.
+
+TEST:
+Send the same email command again. The visible result will still include the full recipient,
+subject, and timing, but MV.ai will only say: "Email sent successfully."
+
+The speech process now:
+- has a strict timeout,
+- is killed if Windows SAPI hangs,
+- automatically returns to LISTENING//HEY MV,
+- can be stopped when voice mode is disabled.
