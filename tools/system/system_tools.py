@@ -3,11 +3,40 @@ import ctypes
 import os
 
 from core.tool import Tool
+from core.tool_schema import ActionSchema, PERMISSION_CONFIRM
 
 
 class SystemTool(Tool):
     name = "system"
-    description = "Time, date, lock, restart and shutdown."
+    description = "Read time/date and control lock, restart, or shutdown."
+    actions = {
+        "time": ActionSchema(
+            description="Return the current local time.",
+            example={},
+        ),
+        "date": ActionSchema(
+            description="Return the current local date.",
+            example={},
+        ),
+        "lock": ActionSchema(
+            description="Lock the computer.",
+            permission=PERMISSION_CONFIRM,
+            confirmation_message="Lock the computer?",
+            example={},
+        ),
+        "restart": ActionSchema(
+            description="Restart the computer immediately.",
+            permission=PERMISSION_CONFIRM,
+            confirmation_message="Restart the computer immediately?",
+            example={},
+        ),
+        "shutdown": ActionSchema(
+            description="Shut down the computer immediately.",
+            permission=PERMISSION_CONFIRM,
+            confirmation_message="Shut down the computer immediately?",
+            example={},
+        ),
+    }
 
     def execute(self, args=None):
         if not args:

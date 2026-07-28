@@ -1,0 +1,18 @@
+MV.ai V4 — More / Settings Popup
+================================
+
+1. Fully close MV.ai.
+2. Copy the ui folder from this patch into your current MV.ai_V4 folder.
+3. Choose "Replace files in the destination".
+4. Keep .env, .venv and user_profile.json untouched.
+5. Start MV.ai with RUN_MVAI.bat.
+
+The More button now opens a centered, dimmed, medium-sized control panel.
+Top dock tabs:
+- General
+- Profile
+- Voice
+- Data & privacy
+- About
+
+Click outside the panel, press Escape, or use × to close it.

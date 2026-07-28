@@ -4,10 +4,18 @@ import shutil
 import subprocess
 from pathlib import Path
 from core.tool import Tool
+from core.tool_schema import ActionSchema
 
 class AppTool(Tool):
     name = "apps"
     description = "Launch installed Windows applications."
+    actions = {
+        "open_app": ActionSchema(
+            description="Open an installed Windows application.",
+            required_arguments=("app_name",),
+            example={"app_name": "VS Code"},
+        ),
+    }
 
     APPS = {
         "calculator":{"aliases":["calculator","calc"],"commands":["calc.exe"]},

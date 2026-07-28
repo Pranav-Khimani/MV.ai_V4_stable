@@ -1,5 +1,6 @@
 from ai.gemini import GeminiProvider
 from ai.planner import TaskPlanner
+from ai.prompts import build_system_prompt
 
 from core.app_paths import get_memory_database_path, get_project_root
 from core.executor import ExecutionReport, TaskExecutor
@@ -27,13 +28,21 @@ class Assistant:
 
     def __init__(self):
         self.registry = ToolRegistry()
-        self.permission_manager = PermissionManager()
         self.plugin_errors: list[str] = []
 
         self.load_tools()
 
-        self.ai_provider = GeminiProvider()
-        self.planner = TaskPlanner(self.ai_provider)
+        self.permission_manager = PermissionManager(self.registry)
+        system_prompt = build_system_prompt(
+            self.registry.list_schemas()
+        )
+        self.ai_provider = GeminiProvider(
+            system_prompt=system_prompt
+        )
+        self.planner = TaskPlanner(
+            self.ai_provider,
+            self.registry,
+        )
 
         self.executor = TaskExecutor(
             registry=self.registry,

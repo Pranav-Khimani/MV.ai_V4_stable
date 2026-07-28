@@ -8,7 +8,7 @@ from google import genai
 from google.genai import errors, types
 
 from ai.models import TaskPlan, TaskStep
-from ai.prompts import SYSTEM_PROMPT
+from ai.prompts import BASE_SYSTEM_PROMPT
 from ai.provider import AIProvider
 
 
@@ -34,7 +34,8 @@ class GeminiProvider(AIProvider):
         "still work. Try again shortly."
     )
 
-    def __init__(self):
+    def __init__(self, system_prompt: str | None = None):
+        self.system_prompt = (system_prompt or BASE_SYSTEM_PROMPT).strip()
         self.client = None
         self.available_models = list(self.PREFERRED_MODELS)
         self.model_name = self.available_models[0]
@@ -116,7 +117,7 @@ class GeminiProvider(AIProvider):
                         model=model_name,
                         contents=command,
                         config=types.GenerateContentConfig(
-                            system_instruction=SYSTEM_PROMPT,
+                            system_instruction=self.system_prompt,
                             temperature=0,
                             response_mime_type="application/json",
                         ),

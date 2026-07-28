@@ -5,6 +5,7 @@ import webbrowser
 from pathlib import Path
 
 from core.tool import Tool
+from core.tool_schema import ActionSchema
 
 
 class WorkflowTool(Tool):
@@ -17,10 +18,22 @@ class WorkflowTool(Tool):
 
     name = "workflow"
 
-    description = (
-        "Runs predefined multi-app workflows such as "
-        "Spark Code Setup."
-    )
+    description = "Run predefined multi-app workflows."
+    actions = {
+        "spark_code_setup": ActionSchema(
+            description=(
+                "Open ChatGPT and a coding workspace, optionally for a "
+                "specific project."
+            ),
+            optional_arguments=("project_name",),
+            example={"project_name": "MV.ai"},
+            prompt_rules=(
+                "Use exactly one workflow step for phrases such as spark code setup, initialize coding setup, or launch code setup.",
+                "If a project name is supplied, preserve it in project_name.",
+                "Do not replace this workflow with separate browser, apps, or file steps.",
+            ),
+        ),
+    }
 
     def __init__(self):
         self.home = Path.home()

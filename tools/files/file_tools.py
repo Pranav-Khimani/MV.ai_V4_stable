@@ -3,15 +3,93 @@ import shutil
 from pathlib import Path
 
 from core.tool import Tool
+from core.tool_schema import ActionSchema, PERMISSION_CONFIRM
 
 
 class FileTool(Tool):
     name = "files"
 
     description = (
-        "Creates, opens, searches, renames, copies, moves, "
-        "and deletes files and folders."
+        "Create, open, search, rename, copy, move, and delete files "
+        "and folders."
     )
+    actions = {
+        "open_folder": ActionSchema(
+            description="Open a folder.",
+            required_arguments=("folder",),
+            example={"folder": "Documents"},
+        ),
+        "create_folder": ActionSchema(
+            description="Create a folder at a chosen location.",
+            required_arguments=("folder_name", "location"),
+            example={
+                "folder_name": "Project Ideas",
+                "location": "Documents",
+            },
+        ),
+        "create_file": ActionSchema(
+            description="Create a file, optionally with text content.",
+            required_arguments=("file_name", "location"),
+            optional_arguments=("content",),
+            example={
+                "file_name": "notes.txt",
+                "location": "Desktop",
+                "content": "Optional text",
+            },
+        ),
+        "search_files": ActionSchema(
+            description="Search common folders for a file or folder.",
+            required_arguments=("query",),
+            example={"query": "project notes"},
+        ),
+        "open_file": ActionSchema(
+            description="Find and open a file.",
+            required_arguments=("query",),
+            example={"query": "notes.txt"},
+        ),
+        "rename_file": ActionSchema(
+            description="Rename a file.",
+            required_arguments=("query", "new_name"),
+            permission=PERMISSION_CONFIRM,
+            confirmation_message="Rename this file?",
+            example={
+                "query": "old-name.txt",
+                "new_name": "new-name.txt",
+            },
+        ),
+        "copy_file": ActionSchema(
+            description="Copy a file to another folder.",
+            required_arguments=("query", "destination"),
+            example={
+                "query": "notes.txt",
+                "destination": "Documents",
+            },
+        ),
+        "move_file": ActionSchema(
+            description="Move a file to another folder.",
+            required_arguments=("query", "destination"),
+            permission=PERMISSION_CONFIRM,
+            confirmation_message="Move this file?",
+            example={
+                "query": "notes.txt",
+                "destination": "Documents",
+            },
+        ),
+        "delete_file": ActionSchema(
+            description="Permanently delete a file.",
+            required_arguments=("query",),
+            permission=PERMISSION_CONFIRM,
+            confirmation_message="Delete this file permanently?",
+            example={"query": "old-notes.txt"},
+        ),
+        "delete_folder": ActionSchema(
+            description="Permanently delete an empty folder.",
+            required_arguments=("query",),
+            permission=PERMISSION_CONFIRM,
+            confirmation_message="Delete this empty folder permanently?",
+            example={"query": "Old Project"},
+        ),
+    }
 
     def __init__(self):
         self.home = Path.home()

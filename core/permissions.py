@@ -1,38 +1,62 @@
-class PermissionManager:
-    """Central confirmation policy for sensitive MV.ai actions."""
+from __future__ import annotations
 
-    SENSITIVE_ACTIONS = {
-        ("system", "lock"): "Lock the computer?",
-        ("system", "restart"): "Restart the computer immediately?",
-        ("system", "shutdown"): "Shut down the computer immediately?",
-        ("files", "rename_file"): "Rename this file?",
-        ("files", "move_file"): "Move this file?",
-        ("files", "delete_file"): "Delete this file permanently?",
-        ("files", "delete_folder"): "Delete this empty folder permanently?",
-        ("device", "wifi_disconnect"): "Disconnect this computer from Wi-Fi?",
-        ("email", "send_email"): "Send this email now?",
-    }
+from core.registry import ToolRegistry
+from core.tool_schema import PERMISSION_CONFIRM
+
+
+class PermissionManager:
+    """Reads confirmation policy directly from registered tool schemas."""
+
+    def __init__(self, registry: ToolRegistry | None = None):
+        self.registry = registry or self._discover_registry()
+
+    @staticmethod
+    def _discover_registry() -> ToolRegistry:
+        """Build a schema registry for standalone permission tests."""
+
+        from core.plugin_loader import discover_tools
+
+        registry = ToolRegistry()
+        tools, errors = discover_tools()
+
+        for tool in tools:
+            registry.register(tool)
+
+        if errors:
+            raise RuntimeError(
+                "Could not load tool schemas: " + "; ".join(errors)
+            )
+
+        return registry
 
     def requires_confirmation(
         self,
         tool_name: str,
         action: str,
     ) -> bool:
-        """Return True when a tool action needs user confirmation."""
-
-        return (tool_name, action) in self.SENSITIVE_ACTIONS
+        action_schema = self.registry.get_action_schema(
+            tool_name,
+            action,
+        )
+        return bool(
+            action_schema
+            and action_schema.permission == PERMISSION_CONFIRM
+        )
 
     def get_confirmation_message(
         self,
         tool_name: str,
         action: str,
     ) -> str:
-        """Return the confirmation message for an action."""
-
-        return self.SENSITIVE_ACTIONS.get(
-            (tool_name, action),
-            f"Allow '{action}'?",
+        action_schema = self.registry.get_action_schema(
+            tool_name,
+            action,
         )
+
+        if action_schema and action_schema.confirmation_message:
+            return action_schema.confirmation_message
+
+        return f"Allow '{action}'?"
 
     def apply_policy(self, parsed: dict) -> dict:
         """Keep compatibility with the older rule-based parser."""
@@ -41,13 +65,11 @@ class PermissionManager:
         args = parsed.get("args") or {}
         action = args.get("action")
 
-        policy_message = self.SENSITIVE_ACTIONS.get(
-            (tool_name, action)
-        )
-
-        if policy_message:
+        if self.requires_confirmation(tool_name, action):
             parsed["requires_confirmation"] = True
-            parsed["confirmation_message"] = policy_message
+            parsed["confirmation_message"] = (
+                self.get_confirmation_message(tool_name, action)
+            )
 
         return parsed
 

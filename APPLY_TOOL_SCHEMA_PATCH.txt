@@ -1,0 +1,13 @@
+MV.ai CENTRAL TOOL SCHEMA PATCH
+================================
+
+1. Fully close MV.ai.
+2. Back up the current working folder once.
+3. Copy everything inside this patch folder into your current MV.ai_V4 folder.
+4. Choose "Replace files in the destination".
+5. Do not delete or replace .env, .venv, or user_profile.json.
+6. Run TEST_TOOL_SCHEMA.bat.
+7. When it passes, run RUN_MVAI.bat.
+
+This patch contains only changed/new files. It does not contain secrets,
+virtual environments, databases, or build folders.

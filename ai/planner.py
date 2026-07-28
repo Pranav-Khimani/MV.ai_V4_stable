@@ -3,6 +3,7 @@ from typing import Any
 
 from ai.models import TaskPlan, TaskStep
 from ai.provider import AIProvider
+from core.registry import ToolRegistry
 
 
 class TaskPlanner:
@@ -14,146 +15,35 @@ class TaskPlanner:
     and argument is valid before execution.
     """
 
-    SUPPORTED_DEVICES = {
-        "laptop",
-        "phone",
-    }
-
-    TOOL_ACTIONS = {
-        "browser": {
-            "open_website",
-            "google_search",
-            "youtube_search",
-        },
-        "files": {
-            "open_folder",
-            "create_folder",
-            "create_file",
-            "search_files",
-            "open_file",
-            "rename_file",
-            "copy_file",
-            "move_file",
-            "delete_file",
-            "delete_folder",
-        },
-        "apps": {
-            "open_app",
-        },
-        "workflow": {
-            "spark_code_setup",
-        },
-        "email": {
-            "send_email",
-        },
-        "system": {
-            "time",
-            "date",
-            "lock",
-            "restart",
-            "shutdown",
-        },
-        "device": {
-            "battery",
-            "read_clipboard",
-            "write_clipboard",
-            "get_volume",
-            "set_volume",
-            "volume_up",
-            "volume_down",
-            "mute",
-            "unmute",
-            "get_brightness",
-            "set_brightness",
-            "brightness_up",
-            "brightness_down",
-            "wifi_status",
-            "wifi_networks",
-            "wifi_disconnect",
-            "open_camera",
-        },
-    }
-
-    REQUIRED_ARGUMENTS = {
-        ("browser", "open_website"): {
-            "query",
-        },
-        ("browser", "google_search"): {
-            "query",
-        },
-        ("browser", "youtube_search"): {
-            "query",
-        },
-        ("files", "open_folder"): {
-            "folder",
-        },
-        ("files", "create_folder"): {
-            "folder_name",
-            "location",
-        },
-        ("files", "create_file"): {
-            "file_name",
-            "location",
-        },
-        ("files", "search_files"): {
-            "query",
-        },
-        ("files", "open_file"): {
-            "query",
-        },
-        ("files", "rename_file"): {
-            "query",
-            "new_name",
-        },
-        ("files", "copy_file"): {
-            "query",
-            "destination",
-        },
-        ("files", "move_file"): {
-            "query",
-            "destination",
-        },
-        ("files", "delete_file"): {
-            "query",
-        },
-        ("files", "delete_folder"): {
-            "query",
-        },
-        ("apps", "open_app"): {
-            "app_name",
-        },
-        ("email", "send_email"): {
-            "to",
-            "subject",
-            "body",
-        },
-        ("device", "write_clipboard"): {
-            "text",
-        },
-        ("device", "set_volume"): {
-            "level",
-        },
-        ("device", "set_brightness"): {
-            "level",
-        },
-    }
-
-    LAPTOP_TOOLS = {
-        "browser",
-        "files",
-        "apps",
-        "workflow",
-        "email",
-        "system",
-        "device",
-    }
-
-    PHONE_TOOLS: set[str] = set()
 
     MAX_STEPS = 20
 
-    def __init__(self, provider: AIProvider):
+    def __init__(
+        self,
+        provider: AIProvider,
+        registry: ToolRegistry | None = None,
+    ):
         self.provider = provider
+        self.registry = registry or self._discover_registry()
+
+    @staticmethod
+    def _discover_registry() -> ToolRegistry:
+        """Build a schema registry for standalone planner tests."""
+
+        from core.plugin_loader import discover_tools
+
+        registry = ToolRegistry()
+        tools, errors = discover_tools()
+
+        for tool in tools:
+            registry.register(tool)
+
+        if errors:
+            raise RuntimeError(
+                "Could not load tool schemas: " + "; ".join(errors)
+            )
+
+        return registry
 
     def create_plan(
         self,
@@ -582,7 +472,7 @@ INSTRUCTIONS:
         device = step.device.strip().lower()
         tool = step.tool.strip().lower()
 
-        if device not in self.SUPPORTED_DEVICES:
+        if device not in self.registry.supported_devices():
             return (
                 f"Step {step_number} uses unsupported "
                 f"device '{step.device}'."
@@ -607,6 +497,13 @@ INSTRUCTIONS:
 
         action = action.strip().lower()
 
+        tool_schema = self.registry.get_schema(tool)
+        if tool_schema is None:
+            return (
+                f"Step {step_number} uses unknown "
+                f"tool '{step.tool}'."
+            )
+
         device_error = self.validate_device_tool(
             device=device,
             tool=tool,
@@ -616,13 +513,7 @@ INSTRUCTIONS:
         if device_error:
             return device_error
 
-        if tool not in self.TOOL_ACTIONS:
-            return (
-                f"Step {step_number} uses unknown "
-                f"tool '{step.tool}'."
-            )
-
-        if action not in self.TOOL_ACTIONS[tool]:
+        if self.registry.get_action_schema(tool, action) is None:
             return (
                 f"Step {step_number} uses unsupported "
                 f"action '{action}' for tool '{tool}'."
@@ -656,32 +547,20 @@ INSTRUCTIONS:
         tool: str,
         step_number: int,
     ) -> str | None:
-        """
-        Ensure the selected tool exists on the selected device.
-        """
+        """Ensure the tool schema supports the selected device."""
 
-        if device == "laptop":
-            if tool not in self.LAPTOP_TOOLS:
-                return (
-                    f"Step {step_number} uses tool "
-                    f"'{tool}', which is not available "
-                    f"on the laptop."
-                )
-
+        if self.registry.supports_device(tool, device):
             return None
 
-        if device == "phone":
-            if tool not in self.PHONE_TOOLS:
-                return (
-                    f"Step {step_number} requires phone "
-                    f"tool '{tool}', but no phone tools "
-                    f"are implemented yet."
-                )
-
-            return None
+        if device == "phone" and "phone" not in self.registry.supported_devices():
+            return (
+                f"Step {step_number} requires phone tool '{tool}', "
+                "but no phone tools are implemented yet."
+            )
 
         return (
-            f"Step {step_number} uses an invalid device."
+            f"Step {step_number} uses tool '{tool}', which is not "
+            f"available on the {device}."
         )
 
     def validate_required_arguments(
@@ -695,9 +574,14 @@ INSTRUCTIONS:
         Ensure required arguments exist and are not empty.
         """
 
-        required_arguments = self.REQUIRED_ARGUMENTS.get(
-            (tool, action),
-            set(),
+        action_schema = self.registry.get_action_schema(
+            tool,
+            action,
+        )
+        required_arguments = (
+            action_schema.required_arguments
+            if action_schema is not None
+            else ()
         )
 
         for argument_name in required_arguments:

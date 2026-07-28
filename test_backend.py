@@ -96,7 +96,7 @@ def main():
     print("3. Creating a test task plan...")
 
     provider = TestProvider()
-    planner = TaskPlanner(provider)
+    planner = TaskPlanner(provider, registry)
 
     plan = planner.create_plan(
         "What time is it?"
@@ -124,7 +124,7 @@ def main():
     print_separator()
     print("4. Executing the task plan...")
 
-    permission_manager = PermissionManager()
+    permission_manager = PermissionManager(registry)
 
     executor = TaskExecutor(
         registry=registry,

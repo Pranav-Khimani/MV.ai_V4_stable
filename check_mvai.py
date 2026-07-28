@@ -23,18 +23,29 @@ def main() -> int:
     import ui
     from ui.window import MVWindow
 
-    print("[3/4] Checking email planning support...")
-    from ai.planner import TaskPlanner
+    print("[3/4] Checking central tool schema...")
     from core.permissions import PermissionManager
+    from core.plugin_loader import discover_tools
+    from core.registry import ToolRegistry
 
-    assert "email" in TaskPlanner.LAPTOP_TOOLS
-    assert "send_email" in TaskPlanner.TOOL_ACTIONS["email"]
-    assert TaskPlanner.REQUIRED_ARGUMENTS[("email", "send_email")] == {
+    registry = ToolRegistry()
+    discovered_tools, loading_errors = discover_tools()
+    assert not loading_errors, loading_errors
+
+    for tool in discovered_tools:
+        registry.register(tool)
+
+    email_action = registry.get_action_schema("email", "send_email")
+    assert email_action is not None
+    assert set(email_action.required_arguments) == {
         "to",
         "subject",
         "body",
     }
-    assert PermissionManager().requires_confirmation("email", "send_email")
+    assert PermissionManager(registry).requires_confirmation(
+        "email",
+        "send_email",
+    )
 
     print("[4/4] Checking core imports...")
     from core.assistant import Assistant

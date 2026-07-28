@@ -10,6 +10,7 @@ from email.message import EmailMessage
 from dotenv import load_dotenv
 
 from core.tool import Tool
+from core.tool_schema import ActionSchema, PERMISSION_CONFIRM
 
 
 load_dotenv()
@@ -24,9 +25,31 @@ class EmailTool(Tool):
     """
 
     name = "email"
-    description = (
-        "Sends an email after explicit user confirmation."
-    )
+    description = "Send plain-text email using the configured SMTP account."
+    actions = {
+        "send_email": ActionSchema(
+            description="Send a plain-text email after user confirmation.",
+            required_arguments=("to", "subject", "body"),
+            optional_arguments=("body_mode",),
+            permission=PERMISSION_CONFIRM,
+            confirmation_message="Send this email now?",
+            example={
+                "to": "recipient@example.com",
+                "subject": "Clear subject",
+                "body": "Complete plain-text message",
+            },
+            prompt_rules=(
+                "Use the email tool whenever the user asks to send an email.",
+                "If recipient, subject, or body is missing, return no steps and ask for it.",
+                "Never substitute opening Gmail or a browser for direct email sending.",
+                "Never claim the email was sent before the tool reports success.",
+                "Never use the subject as the email body.",
+                "When the user says 'saying', 'message', or 'body', preserve that text without changing its meaning.",
+                "When the user says 'about' or 'regarding', write a complete natural email with a greeting, clear sentences, and a closing.",
+                "Put only email content in body; do not include command wording, recipient labels, or execution commentary.",
+            ),
+        ),
+    }
 
     def __init__(self):
         self._server = None

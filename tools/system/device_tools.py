@@ -4,14 +4,90 @@ import subprocess
 import tkinter as tk
 
 from core.tool import Tool
+from core.tool_schema import ActionSchema, PERMISSION_CONFIRM
 
 
 class DeviceTool(Tool):
     name = "device"
     description = (
-        "Controls battery information, clipboard, volume, brightness, "
+        "Read battery status and control clipboard, volume, brightness, "
         "Wi-Fi, and camera."
     )
+    actions = {
+        "battery": ActionSchema(
+            description="Read battery percentage and charging status.",
+            example={},
+        ),
+        "read_clipboard": ActionSchema(
+            description="Read text currently stored in the clipboard.",
+            example={},
+        ),
+        "write_clipboard": ActionSchema(
+            description="Copy text to the clipboard.",
+            required_arguments=("text",),
+            example={"text": "Text to copy"},
+        ),
+        "get_volume": ActionSchema(
+            description="Read the current volume level.",
+            example={},
+        ),
+        "set_volume": ActionSchema(
+            description="Set volume to a percentage from 0 to 100.",
+            required_arguments=("level",),
+            example={"level": 40},
+        ),
+        "volume_up": ActionSchema(
+            description="Increase volume by a small amount.",
+            example={},
+        ),
+        "volume_down": ActionSchema(
+            description="Decrease volume by a small amount.",
+            example={},
+        ),
+        "mute": ActionSchema(
+            description="Mute the computer.",
+            example={},
+        ),
+        "unmute": ActionSchema(
+            description="Unmute the computer.",
+            example={},
+        ),
+        "get_brightness": ActionSchema(
+            description="Read the current display brightness.",
+            example={},
+        ),
+        "set_brightness": ActionSchema(
+            description="Set display brightness from 0 to 100.",
+            required_arguments=("level",),
+            example={"level": 60},
+        ),
+        "brightness_up": ActionSchema(
+            description="Increase brightness by a small amount.",
+            example={},
+        ),
+        "brightness_down": ActionSchema(
+            description="Decrease brightness by a small amount.",
+            example={},
+        ),
+        "wifi_status": ActionSchema(
+            description="Read the connected Wi-Fi network and signal.",
+            example={},
+        ),
+        "wifi_networks": ActionSchema(
+            description="List visible Wi-Fi networks.",
+            example={},
+        ),
+        "wifi_disconnect": ActionSchema(
+            description="Disconnect the computer from Wi-Fi.",
+            permission=PERMISSION_CONFIRM,
+            confirmation_message="Disconnect this computer from Wi-Fi?",
+            example={},
+        ),
+        "open_camera": ActionSchema(
+            description="Open the Windows Camera application.",
+            example={},
+        ),
+    }
 
     def execute(self, args=None):
         if not args:

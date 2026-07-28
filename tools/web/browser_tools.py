@@ -3,11 +3,29 @@ import webbrowser
 from urllib.parse import quote_plus
 
 from core.tool import Tool
+from core.tool_schema import ActionSchema
 
 
 class BrowserTool(Tool):
     name = "browser"
-    description = "Opens websites and searches Google or YouTube."
+    description = "Open websites and search Google or YouTube."
+    actions = {
+        "open_website": ActionSchema(
+            description="Open a website or URL in the default browser.",
+            required_arguments=("query",),
+            example={"query": "youtube"},
+        ),
+        "google_search": ActionSchema(
+            description="Search Google for a query.",
+            required_arguments=("query",),
+            example={"query": "MV.ai desktop assistant"},
+        ),
+        "youtube_search": ActionSchema(
+            description="Search YouTube for a query.",
+            required_arguments=("query",),
+            example={"query": "Python tutorial"},
+        ),
+    }
 
     def execute(self, args=None):
         if not args:
