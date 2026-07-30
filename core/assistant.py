@@ -5,11 +5,13 @@ from ai.prompts import build_system_prompt
 from core.app_paths import get_memory_database_path, get_project_root
 from core.media_store import MediaStore
 from core.executor import ExecutionReport, TaskExecutor
+from core.feature_flags import image_generation_enabled
 from core.permissions import PermissionManager
 from core.plugin_loader import discover_tools
 from core.registry import ToolRegistry
 from core.task_manager import CancellationToken
 
+from memory.memory_commands import MemoryCommandRouter
 from memory.memory_manager import MemoryManager
 from memory.reality_manager import RealityManager
 from memory.user_profile import UserProfile
@@ -30,9 +32,26 @@ class Assistant:
     def __init__(self):
         self.registry = ToolRegistry()
         self.plugin_errors: list[str] = []
+        self.image_generation_enabled = image_generation_enabled()
 
         self.load_tools()
 
+        database_path = get_memory_database_path()
+        self.memory = MemoryManager(
+            database_path=str(database_path)
+        )
+        self.realities = RealityManager(self.memory)
+
+        profile_path = get_project_root() / "user_profile.json"
+        self.user_profile = UserProfile(profile_path)
+        self.memory_commands = MemoryCommandRouter(
+            self.memory,
+            self.user_profile,
+        )
+        self.bind_memory_tool()
+
+        # Build permissions and the Gemini tool prompt only after the bound
+        # memory tool is present in the central schema registry.
         self.permission_manager = PermissionManager(self.registry)
         system_prompt = build_system_prompt(
             self.registry.list_schemas()
@@ -44,23 +63,11 @@ class Assistant:
             self.ai_provider,
             self.registry,
         )
-
         self.executor = TaskExecutor(
             registry=self.registry,
             permission_manager=self.permission_manager,
         )
 
-        database_path = get_memory_database_path()
-
-        self.memory = MemoryManager(
-            database_path=str(database_path)
-        )
-        self.realities = RealityManager(
-            self.memory
-        )
-
-        profile_path = get_project_root() / "user_profile.json"
-        self.user_profile = UserProfile(profile_path)
         self.media_store = MediaStore()
 
         print(f"[Memory database] {database_path}")
@@ -75,6 +82,15 @@ class Assistant:
         self.plugin_errors.extend(loading_errors)
 
         for tool in discovered_tools:
+            # Defensive guard in case a custom plugin loader returns the image
+            # tool while the feature is disabled. Image analysis is separate
+            # and remains available through attached-image handling.
+            if (
+                getattr(tool, "name", "") == "images"
+                and not self.image_generation_enabled
+            ):
+                continue
+
             try:
                 self.registry.register(tool)
             except Exception as error:
@@ -103,11 +119,35 @@ class Assistant:
                 self.registry.list_tools()
             )
         )
+        print(
+            "[Feature] Image generation: "
+            + ("enabled" if self.image_generation_enabled else "disabled")
+        )
 
         if self.plugin_errors:
             print("[Plugin warnings]")
             for error in self.plugin_errors:
                 print(f"- {error}")
+
+    def bind_memory_tool(self) -> None:
+        """Connect the schema-registered memory tool to this assistant DB."""
+
+        from tools.memory.memory_tools import MemoryTool
+
+        tool = self.registry.get("memory")
+        if tool is None:
+            try:
+                tool = MemoryTool(self.memory)
+                self.registry.register(tool)
+            except Exception as error:
+                self.plugin_errors.append(
+                    f"Could not register MemoryTool fallback: {error}"
+                )
+                return
+
+        bind = getattr(tool, "bind", None)
+        if callable(bind):
+            bind(self.memory)
 
     def handle_command(
         self,
@@ -149,7 +189,7 @@ class Assistant:
                 message="Please enter a task.",
             )
 
-    
+
         self.save_conversation_message(
             role="user",
             content=command,
@@ -157,6 +197,65 @@ class Assistant:
 
         if cancellation_token is not None:
             cancellation_token.raise_if_cancelled()
+
+        # Keep paid image generation dormant without deleting its code.
+        # Attached-image analysis remains fully available.
+        if (
+            not self.image_generation_enabled
+            and TaskPlanner.is_image_generation_request(command)
+        ):
+            report = ExecutionReport(
+                goal="Image generation is paused",
+                success=True,
+                completed_steps=0,
+                total_steps=0,
+                message=(
+                    "Image generation is currently paused. Image analysis "
+                    "still works, and generation can be enabled later by "
+                    "setting MV_IMAGE_GENERATION_ENABLED=true in .env and "
+                    "restarting MV.ai."
+                ),
+            )
+            self.save_report_to_memory(
+                command=command,
+                report=report,
+            )
+            return report
+
+        # Explicit remember/recall/update/forget commands are local and
+        # remain available without Gemini or an internet connection.
+        stage("Checking long-term memory command")
+        memory_plan = self.memory_commands.create_plan(command)
+
+        if memory_plan is not None:
+            if cancellation_token is not None:
+                cancellation_token.raise_if_cancelled()
+
+            if not memory_plan.steps:
+                report = ExecutionReport(
+                    goal=memory_plan.goal,
+                    success=True,
+                    completed_steps=0,
+                    total_steps=0,
+                    message=(
+                        memory_plan.message
+                        or "The memory request was handled locally."
+                    ),
+                )
+            else:
+                stage("Updating long-term memory", 0, len(memory_plan.steps))
+                report = self.executor.execute_plan(
+                    plan=memory_plan,
+                    confirmation_callback=confirmation_callback,
+                    progress_callback=progress_callback,
+                    cancellation_token=cancellation_token,
+                )
+
+            self.save_report_to_memory(
+                command=command,
+                report=report,
+            )
+            return report
 
         # Profile questions are answered directly from user_profile.json.
         # They remain available even when Gemini or the internet is down.
@@ -463,10 +562,12 @@ class Assistant:
         """
 
         response_text = self.get_report_response_text(report)
+        attachments = self.get_report_attachments(report)
 
         self.save_conversation_message(
             role="assistant",
             content=response_text,
+            attachments=attachments,
         )
 
         error_message = None
@@ -507,6 +608,17 @@ class Assistant:
             for result in report.results:
                 if result.output is None:
                     continue
+
+                if isinstance(result.output, dict):
+                    if result.output.get("kind") == "generated_image":
+                        text = str(
+                            result.output.get("display_text")
+                            or "Your image is ready."
+                        ).strip()
+                        if text:
+                            outputs.append(text)
+                        continue
+
                 output = str(result.output).strip()
                 if output:
                     outputs.append(output)
@@ -516,18 +628,32 @@ class Assistant:
 
             return report.message or "Task completed successfully."
 
-        error_parts = []
+        # ``report.message`` already contains the failed step's error. Do
+        # not append the same tool error again underneath it.
         if report.message:
-            error_parts.append(report.message)
+            return str(report.message).strip()
 
-        for result in report.results:
+        for result in reversed(report.results):
             if result.error:
-                error_parts.append(result.error)
-
-        if error_parts:
-            return "\n".join(dict.fromkeys(error_parts))
+                return str(result.error).strip()
 
         return "The task could not be completed."
+
+    @staticmethod
+    def get_report_attachments(
+        report: ExecutionReport,
+    ) -> list[dict]:
+        """Return generated media attachments contained in a report."""
+
+        attachments: list[dict] = []
+        for result in report.results:
+            output = result.output
+            if not isinstance(output, dict):
+                continue
+            if output.get("kind") != "generated_image":
+                continue
+            attachments.append(dict(output))
+        return attachments
 
     def start_new_reality(self) -> str:
         """
@@ -652,6 +778,10 @@ class Assistant:
             "memory": self.get_memory_status(),
             "tools": self.list_tools(),
             "plugin_errors": self.get_plugin_errors(),
+            "features": {
+                "image_analysis": True,
+                "image_generation": self.image_generation_enabled,
+            },
         }
 
     def shutdown(self) -> None:

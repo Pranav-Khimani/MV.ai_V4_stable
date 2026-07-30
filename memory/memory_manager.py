@@ -1,6 +1,8 @@
 import json
+import re
 import uuid
 from datetime import datetime
+from difflib import SequenceMatcher
 from typing import Any
 
 from memory.database import MemoryDatabase
@@ -83,6 +85,276 @@ class MemoryManager:
         )
 
         return normalized or "general"
+
+    @staticmethod
+    def display_key(key: str) -> str:
+        """Turn an internal memory key into readable text."""
+
+        return str(key).replace("_", " ").strip()
+
+    def get_memory_by_id(
+        self,
+        memory_id: int,
+        include_inactive: bool = False,
+    ) -> dict[str, Any] | None:
+        """Return one memory by database ID."""
+
+        query = "SELECT * FROM memories WHERE id = ?"
+        parameters: tuple[Any, ...] = (int(memory_id),)
+        if not include_inactive:
+            query += " AND is_active = 1"
+        query += " LIMIT 1"
+        return self.database.fetch_one(query, parameters)
+
+    def find_exact(
+        self,
+        key: str,
+        category: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Find an active memory by its normalized key."""
+
+        normalized_key = self.normalize_key(key)
+        if category:
+            return self.database.fetch_one(
+                """
+                SELECT * FROM memories
+                WHERE memory_key = ?
+                  AND category = ?
+                  AND is_active = 1
+                LIMIT 1
+                """,
+                (normalized_key, self.normalize_category(category)),
+            )
+
+        return self.database.fetch_one(
+            """
+            SELECT * FROM memories
+            WHERE memory_key = ?
+              AND is_active = 1
+            ORDER BY importance DESC, updated_at DESC
+            LIMIT 1
+            """,
+            (normalized_key,),
+        )
+
+    def create_memory(
+        self,
+        key: str,
+        value: Any,
+        category: str = "general",
+        importance: int = 5,
+        source: str = "user",
+    ) -> dict[str, Any]:
+        """Create a memory without silently overwriting an existing one."""
+
+        existing = self.find_exact(key, category)
+        if existing is not None:
+            raise ValueError(
+                "A memory with that key already exists in this category."
+            )
+
+        return self.remember(
+            key=key,
+            value=value,
+            category=category,
+            importance=importance,
+            source=source,
+        )
+
+    def update_memory(
+        self,
+        memory_id: int,
+        *,
+        key: str | None = None,
+        value: Any | None = None,
+        category: str | None = None,
+        importance: int | None = None,
+        source: str = "user",
+    ) -> dict[str, Any]:
+        """Update one memory by ID and return the refreshed row."""
+
+        current = self.get_memory_by_id(memory_id)
+        if current is None:
+            raise ValueError("That memory no longer exists.")
+
+        new_key = self.normalize_key(key or current["memory_key"])
+        new_category = self.normalize_category(category or current["category"])
+        new_value = str(
+            current["memory_value"] if value is None else value
+        ).strip()
+        new_importance = current["importance"] if importance is None else max(
+            1, min(int(importance), 10)
+        )
+
+        if not new_key:
+            raise ValueError("Memory key cannot be empty.")
+        if not new_value:
+            raise ValueError("Memory value cannot be empty.")
+
+        duplicate = self.database.fetch_one(
+            """
+            SELECT id FROM memories
+            WHERE category = ?
+              AND memory_key = ?
+              AND id != ?
+              AND is_active = 1
+            LIMIT 1
+            """,
+            (new_category, new_key, int(memory_id)),
+        )
+        if duplicate is not None:
+            raise ValueError(
+                "Another active memory already uses that key and category."
+            )
+
+        self.database.execute(
+            """
+            UPDATE memories
+            SET category = ?,
+                memory_key = ?,
+                memory_value = ?,
+                importance = ?,
+                source = ?,
+                updated_at = ?,
+                is_active = 1
+            WHERE id = ?
+            """,
+            (
+                new_category,
+                new_key,
+                new_value,
+                new_importance,
+                source,
+                self.now(),
+                int(memory_id),
+            ),
+        )
+        refreshed = self.get_memory_by_id(memory_id)
+        if refreshed is None:
+            raise RuntimeError("The memory could not be reloaded after updating.")
+        return refreshed
+
+    def forget_by_id(
+        self,
+        memory_id: int,
+        permanent: bool = False,
+    ) -> bool:
+        """Deactivate or permanently delete one memory by ID."""
+
+        existing = self.get_memory_by_id(memory_id)
+        if existing is None:
+            return False
+
+        if permanent:
+            self.database.execute(
+                "DELETE FROM memories WHERE id = ?",
+                (int(memory_id),),
+            )
+        else:
+            self.database.execute(
+                """
+                UPDATE memories
+                SET is_active = 0, updated_at = ?
+                WHERE id = ?
+                """,
+                (self.now(), int(memory_id)),
+            )
+        return True
+
+    @staticmethod
+    def _search_tokens(text: str) -> set[str]:
+        stop_words = {
+            "a", "an", "and", "are", "about", "at", "be", "do",
+            "for", "from", "i", "in", "is", "it", "me", "my",
+            "of", "on", "that", "the", "this", "to", "what",
+            "where", "you", "your",
+        }
+        return {
+            token
+            for token in re.findall(r"[a-z0-9]+", text.lower())
+            if token not in stop_words and len(token) > 1
+        }
+
+    @classmethod
+    def _expanded_tokens(cls, text: str) -> set[str]:
+        tokens = cls._search_tokens(text)
+        synonym_groups = (
+            {"folder", "directory", "path", "location"},
+            {"college", "school", "education", "class"},
+            {"gym", "workout", "exercise", "fitness"},
+            {"editor", "vscode", "coding", "development"},
+            {"project", "app", "software", "mvai", "assistant"},
+            {"preference", "prefer", "style", "choice"},
+            {"name", "nickname", "called", "identity"},
+            {"routine", "schedule", "habit", "daily"},
+        )
+        expanded = set(tokens)
+        for group in synonym_groups:
+            if tokens.intersection(group):
+                expanded.update(group)
+        return expanded
+
+    def search_relevant(
+        self,
+        query: str,
+        category: str | None = None,
+        limit: int = 10,
+        minimum_score: float = 0.18,
+    ) -> list[dict[str, Any]]:
+        """Rank memories using exact, token, synonym, and fuzzy matching."""
+
+        query = str(query).strip()
+        if not query:
+            return []
+
+        candidates = self.get_all_memories(category=category, limit=500)
+        query_lower = query.lower()
+        query_tokens = self._expanded_tokens(query)
+        ranked: list[dict[str, Any]] = []
+
+        for memory in candidates:
+            key_text = self.display_key(memory["memory_key"])
+            value_text = str(memory["memory_value"])
+            category_text = str(memory["category"])
+            haystack = f"{key_text} {value_text} {category_text}".lower()
+            candidate_tokens = self._expanded_tokens(haystack)
+
+            score = 0.0
+            if query_lower == key_text.lower():
+                score += 1.25
+            if query_lower in key_text.lower():
+                score += 0.75
+            if query_lower in value_text.lower():
+                score += 0.55
+            if query_lower in haystack:
+                score += 0.25
+
+            if query_tokens:
+                overlap = len(query_tokens.intersection(candidate_tokens))
+                score += 0.9 * overlap / max(1, len(query_tokens))
+
+            score += 0.35 * SequenceMatcher(
+                None, query_lower, key_text.lower()
+            ).ratio()
+            score += 0.15 * SequenceMatcher(
+                None, query_lower, value_text.lower()
+            ).ratio()
+            score += min(int(memory.get("importance", 5)), 10) * 0.005
+
+            if score >= minimum_score:
+                item = dict(memory)
+                item["relevance_score"] = round(score, 4)
+                ranked.append(item)
+
+        ranked.sort(
+            key=lambda item: (
+                item["relevance_score"],
+                item.get("importance", 0),
+                item.get("updated_at", ""),
+            ),
+            reverse=True,
+        )
+        return ranked[: max(1, min(int(limit), 100))]
 
     def create_session(
         self,
@@ -173,6 +445,10 @@ class MemoryManager:
         )
 
         value_text = str(value).strip()
+        if not value_text:
+            raise ValueError(
+                "Memory value cannot be empty."
+            )
         current_time = self.now()
 
         existing = self.database.fetch_one(
@@ -388,71 +664,12 @@ class MemoryManager:
         category: str | None = None,
         limit: int = 10,
     ) -> list[dict[str, Any]]:
-        """
-        Search memory keys and values.
+        """Search memories with ranked fuzzy and synonym matching."""
 
-        This uses SQLite LIKE searching for the MVP.
-        """
-
-        query = query.strip()
-
-        if not query:
-            return []
-
-        search_pattern = (
-            f"%{query.lower()}%"
-        )
-
-        limit = max(
-            1,
-            min(int(limit), 100),
-        )
-
-        if category:
-            normalized_category = self.normalize_category(
-                category
-            )
-
-            return self.database.fetch_all(
-                """
-                SELECT *
-                FROM memories
-                WHERE is_active = 1
-                  AND category = ?
-                  AND (
-                      LOWER(memory_key) LIKE ?
-                      OR LOWER(memory_value) LIKE ?
-                  )
-                ORDER BY importance DESC,
-                         updated_at DESC
-                LIMIT ?
-                """,
-                (
-                    normalized_category,
-                    search_pattern,
-                    search_pattern,
-                    limit,
-                ),
-            )
-
-        return self.database.fetch_all(
-            """
-            SELECT *
-            FROM memories
-            WHERE is_active = 1
-              AND (
-                  LOWER(memory_key) LIKE ?
-                  OR LOWER(memory_value) LIKE ?
-              )
-            ORDER BY importance DESC,
-                     updated_at DESC
-            LIMIT ?
-            """,
-            (
-                search_pattern,
-                search_pattern,
-                limit,
-            ),
+        return self.search_relevant(
+            query=query,
+            category=category,
+            limit=limit,
         )
 
     def get_all_memories(

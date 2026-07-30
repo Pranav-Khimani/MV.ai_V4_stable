@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -236,6 +242,94 @@ class ChatImageWidget(QFrame):
         if self.image_path.exists():
             ImageViewerDialog(self.image_path, self.window()).exec()
 
+
+
+class GeneratedImageWidget(ChatImageWidget):
+    """Generated-image card with useful local actions."""
+
+    regenerate_requested = Signal(str)
+
+    def __init__(
+        self,
+        image_path: str | Path,
+        metadata: dict | None = None,
+        parent=None,
+    ):
+        self.metadata = dict(metadata or {})
+        super().__init__(image_path, parent)
+
+        actions = QHBoxLayout()
+        actions.setContentsMargins(0, 0, 0, 0)
+        actions.setSpacing(7)
+
+        save_button = self._make_action_button("Save as")
+        copy_button = self._make_action_button("Copy image")
+        folder_button = self._make_action_button("Open folder")
+
+        save_button.clicked.connect(self.save_as)
+        copy_button.clicked.connect(self.copy_image)
+        folder_button.clicked.connect(self.open_folder)
+
+        actions.addWidget(save_button)
+        actions.addWidget(copy_button)
+        actions.addWidget(folder_button)
+        actions.addStretch(1)
+        self.layout().addLayout(actions)
+
+        prompt = str(self.metadata.get("prompt", "")).strip()
+        if prompt:
+            prompt_label = QLabel(f"Prompt: {prompt}")
+            prompt_label.setWordWrap(True)
+            prompt_label.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+            )
+            prompt_label.setStyleSheet(
+                "color: #8E96A9; font-size: 10px; padding-top: 2px;"
+            )
+            self.layout().addWidget(prompt_label)
+
+    @staticmethod
+    def _make_action_button(text: str) -> QPushButton:
+        button = QPushButton(text)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setStyleSheet(
+            "QPushButton { background: #202638; color: #DDE1EB; "
+            "border: 1px solid #343C53; border-radius: 12px; "
+            "padding: 6px 10px; font-size: 11px; } "
+            "QPushButton:hover { background: #2A3248; border-color: #8177FF; }"
+        )
+        return button
+
+    def save_as(self) -> None:
+        if not self.image_path.exists():
+            return
+        destination, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save generated image",
+            self.image_path.name,
+            "Images (*.png *.jpg *.jpeg *.webp)",
+        )
+        if destination:
+            shutil.copy2(self.image_path, destination)
+
+    def copy_image(self) -> None:
+        if self.original_pixmap.isNull():
+            return
+        QApplication.clipboard().setPixmap(self.original_pixmap)
+
+    def open_folder(self) -> None:
+        folder = self.image_path.parent
+        if not folder.exists():
+            return
+        try:
+            if os.name == "nt":
+                os.startfile(str(folder))
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(folder)])
+            else:
+                subprocess.Popen(["xdg-open", str(folder)])
+        except Exception:
+            pass
 
 def format_file_size(size_bytes: int) -> str:
     size = float(size_bytes)

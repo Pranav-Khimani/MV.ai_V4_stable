@@ -1997,7 +1997,22 @@ class MVWindow(QMainWindow):
         )
         self.set_working_state(False)
 
-        if self.isMinimized() or not self.isActiveWindow():
+        is_screenshot_capture = (
+            report.success
+            and any(
+                result.tool == "screenshot"
+                and result.action in {"capture", "take", "screenshot"}
+                for result in report.results
+            )
+        )
+
+        if is_screenshot_capture:
+            self.notify_desktop(
+                "Screenshot captured",
+                "Saved to Pictures > MV.AI Screenshots",
+                QSystemTrayIcon.MessageIcon.Information,
+            )
+        elif self.isMinimized() or not self.isActiveWindow():
             title = (
                 "MV.AI task complete"
                 if report.success

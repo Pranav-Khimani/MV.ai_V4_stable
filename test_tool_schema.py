@@ -4,6 +4,7 @@ from ai.models import TaskPlan, TaskStep
 from ai.planner import TaskPlanner
 from ai.prompts import build_system_prompt
 from ai.provider import AIProvider
+from core.feature_flags import image_generation_enabled
 from core.permissions import PermissionManager
 from core.plugin_loader import discover_tools
 from core.registry import ToolRegistry
@@ -38,9 +39,12 @@ def main() -> int:
         "device",
         "email",
         "files",
+        "memory",
         "system",
         "workflow",
     }
+    if image_generation_enabled():
+        expected_tools.add("images")
     assert set(registry.list_tools()) == expected_tools
 
     checked_actions = 0
@@ -116,6 +120,21 @@ def main() -> int:
     )
     assert email_plan is not None
     assert planner.validate_plan(email_plan).steps
+
+
+    image_plan = planner.try_create_direct_image_plan(
+        "Generate an image of a futuristic purple city at night in 16:9."
+    )
+    assert image_plan is not None
+    validated_image_plan = planner.validate_plan(image_plan)
+
+    if image_generation_enabled():
+        assert validated_image_plan.steps
+        assert validated_image_plan.steps[0].tool == "images"
+        assert validated_image_plan.steps[0].args["action"] == "generate_image"
+        assert validated_image_plan.steps[0].args["aspect_ratio"] == "16:9"
+    else:
+        assert not validated_image_plan.steps
 
     print(f"[PASSED] {len(expected_tools)} tools registered.")
     print(f"[PASSED] {checked_actions} actions validated from one schema system.")

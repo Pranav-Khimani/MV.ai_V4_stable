@@ -320,6 +320,7 @@ class TaskExecutor:
             self.permission_manager.get_confirmation_message(
                 step.tool,
                 action,
+                dict(step.args),
             )
         )
 

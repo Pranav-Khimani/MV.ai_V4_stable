@@ -40,8 +40,13 @@ class MediaStore:
     MAX_IMAGE_BYTES = 18 * 1024 * 1024
 
     def __init__(self, root: Path | None = None):
-        self.app_root = get_app_data_dir()
-        self.root = Path(root) if root is not None else self.app_root / "media"
+        if root is None:
+            self.app_root = get_app_data_dir()
+            self.root = self.app_root / "media"
+        else:
+            self.root = Path(root).expanduser().resolve()
+            self.app_root = self.root.parent
+
         self.root.mkdir(parents=True, exist_ok=True)
 
     @classmethod
@@ -119,6 +124,61 @@ class MediaStore:
             mime_type=details["mime_type"],
             size_bytes=details["size_bytes"],
         )
+
+
+    def store_generated_image(
+        self,
+        image_bytes: bytes,
+        mime_type: str,
+        prompt: str,
+        model: str,
+        aspect_ratio: str = "1:1",
+        image_size: str = "1K",
+    ) -> dict[str, Any]:
+        """Save one AI-generated image and return Reality-safe metadata."""
+
+        if not isinstance(image_bytes, (bytes, bytearray)) or not image_bytes:
+            raise ValueError("Gemini returned an empty image.")
+
+        payload = bytes(image_bytes)
+        detected_mime = self._detect_mime(payload[:16])
+        if detected_mime is None:
+            raise ValueError("Gemini returned image data MV.ai could not verify.")
+
+        selected_mime = detected_mime
+        extension = {
+            "image/png": ".png",
+            "image/jpeg": ".jpg",
+            "image/webp": ".webp",
+        }[selected_mime]
+
+        now = datetime.now()
+        destination_dir = (
+            self.root
+            / "generated"
+            / now.strftime("%Y")
+            / now.strftime("%m")
+        )
+        destination_dir.mkdir(parents=True, exist_ok=True)
+
+        stored_name = f"mv_generated_{uuid.uuid4().hex}{extension}"
+        destination = destination_dir / stored_name
+        destination.write_bytes(payload)
+        relative_path = destination.relative_to(self.app_root)
+
+        return {
+            "kind": "generated_image",
+            "path": str(destination),
+            "relative_path": str(relative_path),
+            "original_name": stored_name,
+            "stored_name": stored_name,
+            "mime_type": selected_mime,
+            "size_bytes": len(payload),
+            "prompt": str(prompt).strip(),
+            "model": str(model).strip(),
+            "aspect_ratio": str(aspect_ratio).strip() or "1:1",
+            "image_size": str(image_size).strip() or "1K",
+        }
 
     def resolve_path(self, attachment: dict[str, Any] | ImageAttachment) -> Path | None:
         data = attachment.to_dict() if isinstance(attachment, ImageAttachment) else attachment

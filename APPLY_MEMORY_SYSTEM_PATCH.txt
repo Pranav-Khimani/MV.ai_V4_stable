@@ -1,0 +1,4 @@
+Copy the full contents of this folder into your current MV.ai_V4 folder.
+Choose Replace files in the destination.
+Do not delete or replace .env, .venv, user_profile.json, or your AppData DB.
+Then run TEST_MEMORY_SYSTEM.bat and RUN_MVAI.bat.

@@ -3,6 +3,7 @@ import inspect
 import pkgutil
 
 import tools
+from core.feature_flags import image_generation_enabled
 from core.tool import Tool
 
 
@@ -26,6 +27,15 @@ def discover_tools():
             continue
 
         module_name = module_info.name
+
+        # Image analysis remains available. Only the paid image-generation
+        # plugin is hidden when the feature flag is disabled. Skipping the
+        # module before import also avoids unnecessary SDK initialization.
+        if (
+            not image_generation_enabled()
+            and module_name == "tools.media.image_generation_tools"
+        ):
+            continue
 
         try:
             module = importlib.import_module(module_name)

@@ -1,0 +1,16 @@
+MV.ai image-generation feature flag
+=====================================
+
+1. Close MV.ai completely.
+2. Copy every file/folder from this patch into your MV.ai_V4 folder.
+3. Choose Replace files in the destination.
+4. Double-click DISABLE_IMAGE_GENERATION.bat.
+5. Double-click TEST_IMAGE_FEATURE_FLAG.bat.
+6. Start MV.ai with RUN_MVAI.bat.
+
+Do not type MV_IMAGE_GENERATION_ENABLED=false into PowerShell.
+That setting belongs inside the .env file. The included batch file writes it
+for you safely without touching your API keys or email credentials.
+
+Image analysis remains enabled. The image-generation implementation remains in
+the project and can be re-enabled later with ENABLE_IMAGE_GENERATION_LATER.bat.

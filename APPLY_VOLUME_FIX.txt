@@ -1,0 +1,17 @@
+MV.ai V4 — Windows Volume Fix
+
+1. Fully close MV.ai.
+2. Copy every file/folder from this patch into your working MV.ai_V4 folder.
+3. Choose "Replace files in the destination".
+4. Keep .env, .venv, user_profile.json, and the database unchanged.
+5. Double-click TEST_VOLUME_FIX.bat.
+6. Start MV.ai using RUN_MVAI.bat.
+7. Test: "set the volume to 100".
+
+Changes:
+- Initializes Windows COM in the tool worker thread.
+- Uses normal scalar volume control first.
+- Falls back to the endpoint's decibel range when a driver rejects scalar control.
+- Supports 0%, 100%, volume up/down, mute, and unmute.
+- Hides raw COM tuples from the chat.
+- Removes duplicated step-error text in red bubbles.

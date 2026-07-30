@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 
 from core.app_paths import get_app_data_dir, get_logs_dir
 from memory.user_profile import UserProfile
+from ui.widgets.memory_page import MemorySettingsPage
 
 
 class MorePopup(QDialog):
@@ -112,8 +113,9 @@ class MorePopup(QDialog):
         ),
     )
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, memory_manager=None):
         super().__init__(parent)
+        self.memory_manager = memory_manager
 
         self.setWindowFlags(
             Qt.WindowType.Dialog
@@ -164,7 +166,7 @@ class MorePopup(QDialog):
 
         title = QLabel("MV.AI CONTROL CENTER")
         title.setObjectName("popupTitle")
-        subtitle = QLabel("Settings, profile, voice, data and app information")
+        subtitle = QLabel("Settings, profile, memory, voice, data and app information")
         subtitle.setObjectName("popupSubtitle")
 
         title_box.addWidget(title)
@@ -194,6 +196,7 @@ class MorePopup(QDialog):
         nav_items = [
             ("general", "⚙", "General"),
             ("profile", "♙", "Profile"),
+            ("memory", "🧠", "Memory"),
             ("voice", "🎙", "Voice"),
             ("data", "⛨", "Data & privacy"),
             ("about", "✦", "About MV.ai"),
@@ -234,6 +237,11 @@ class MorePopup(QDialog):
 
         self._add_page("general", "General", self._build_general_page())
         self._add_page("profile", "Profile", self._build_profile_page())
+        self._add_page(
+            "memory",
+            "Long-term memory",
+            MemorySettingsPage(self.memory_manager, self),
+        )
         self._add_page("voice", "Voice", self._build_voice_page())
         self._add_page("data", "Data & privacy", self._build_data_page())
         self._add_page("about", "About MV.ai", self._build_about_page())
@@ -1188,5 +1196,58 @@ class MorePopup(QDialog):
             QPushButton#saveProfileButton:hover {
                 background: #7D70FF;
                 border-color: #A29AFF;
+            }
+
+            QFrame#memoryToolbar {
+                background: #151927;
+                border: 1px solid #30384D;
+                border-radius: 14px;
+            }
+
+            QLineEdit#memorySearch, QComboBox#memoryFilter {
+                background: #0F1320;
+                color: #F1F3F8;
+                border: 1px solid #30384D;
+                border-radius: 10px;
+                padding: 9px 11px;
+                selection-background-color: #6F61F6;
+            }
+
+            QComboBox#memoryFilter QAbstractItemView {
+                background: #151927;
+                color: #F1F3F8;
+                selection-background-color: #38345F;
+            }
+
+            QTableWidget#memoryTable {
+                background: #0F1320;
+                alternate-background-color: #121725;
+                color: #E9ECF4;
+                border: 1px solid #30384D;
+                border-radius: 11px;
+                gridline-color: #252C3D;
+                selection-background-color: #38345F;
+                selection-color: #FFFFFF;
+                outline: none;
+            }
+
+            QTableWidget#memoryTable::item {
+                padding: 7px;
+                border: none;
+            }
+
+            QPushButton#dangerButton {
+                background: #2A1820;
+                color: #FF9DA9;
+                border: 1px solid #57313C;
+                border-radius: 10px;
+                padding: 9px 14px;
+                font-size: 11px;
+                font-weight: 650;
+            }
+
+            QPushButton#dangerButton:hover {
+                background: #3A2029;
+                border-color: #8B4658;
             }
         """

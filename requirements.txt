@@ -1,9 +1,10 @@
 PySide6
 python-dotenv
-google-genai
+google-genai>=2.12.1,<3
 SpeechRecognition
 PyAudio
 psutil
 pycaw
 screen-brightness-control
 cryptography
+Pillow>=10.0.0

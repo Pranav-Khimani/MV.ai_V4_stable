@@ -63,6 +63,23 @@ class TaskPlanner:
                 "Please enter a task."
             )
 
+        # Screenshot requests are deterministic local desktop actions.
+        # Route them locally so Gemini cannot mistake them for chat.
+        direct_screenshot_plan = self.try_create_direct_screenshot_plan(
+            command
+        )
+
+        if direct_screenshot_plan is not None:
+            return self.validate_plan(direct_screenshot_plan)
+
+        # Common image-generation requests are parsed locally only when
+        # the feature is registered. When disabled, Assistant returns a clean
+        # local message before Gemini or the planner is called.
+        if self.registry.get("images") is not None:
+            direct_image_plan = self.try_create_direct_image_plan(command)
+            if direct_image_plan is not None:
+                return self.validate_plan(direct_image_plan)
+
         # Complete email commands are parsed locally before Gemini.
         # This prevents the planner from shrinking a topic into a few
         # keywords or accidentally using the subject as the message.
@@ -95,6 +112,153 @@ class TaskPlanner:
 
         return self.validate_plan(
             proposed_plan
+        )
+
+    @classmethod
+    def try_create_direct_screenshot_plan(
+        cls,
+        command: str,
+    ) -> TaskPlan | None:
+        """Create a reliable local plan for screenshot commands."""
+
+        normalized = " ".join(str(command).strip().lower().split())
+        if not normalized:
+            return None
+
+        open_folder_patterns = (
+            r"\bopen (?:my |the )?screenshots? folder\b",
+            r"\bshow (?:my |the )?screenshots? folder\b",
+            r"\bwhere are (?:my )?screenshots?\b",
+        )
+        if any(re.search(pattern, normalized) for pattern in open_folder_patterns):
+            return TaskPlan(
+                goal="Open the screenshots folder",
+                steps=[
+                    TaskStep(
+                        device="laptop",
+                        tool="screenshot",
+                        args={"action": "open_folder"},
+                        description="Open the MV.AI screenshots folder.",
+                    )
+                ],
+                message="",
+            )
+
+        capture_patterns = (
+            r"\btake (?:a )?screenshots?\b",
+            r"\bcapture (?:my |the )?(?:screen|desktop)\b",
+            r"\bscreenshot (?:my |the )?(?:screen|desktop)\b",
+            r"\bscreen ?shot\b",
+        )
+        if not any(re.search(pattern, normalized) for pattern in capture_patterns):
+            return None
+
+        open_after_capture = not bool(
+            re.search(r"\b(?:do not|don't|dont) open\b", normalized)
+        )
+
+        return TaskPlan(
+            goal="Take a screenshot",
+            steps=[
+                TaskStep(
+                    device="laptop",
+                    tool="screenshot",
+                    args={
+                        "action": "capture",
+                        "open_after_capture": open_after_capture,
+                    },
+                    description="Capture and save the desktop screenshot.",
+                )
+            ],
+            message="",
+        )
+
+    @staticmethod
+    def is_image_generation_request(command: str) -> bool:
+        """Return True for clear requests to create a new visual."""
+
+        normalized = " ".join(str(command).strip().split())
+        if not normalized:
+            return False
+
+        intent = re.search(
+            r"\b(?:generate|create|make|draw|design|render|produce)\b",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        visual = re.search(
+            r"\b(?:image|picture|photo|poster|wallpaper|illustration|"
+            r"artwork|visual|logo|icon|portrait)\b",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        return bool(intent and visual)
+
+    @classmethod
+    def try_create_direct_image_plan(
+        cls,
+        command: str,
+    ) -> TaskPlan | None:
+        """Create a reliable single-step plan for clear generation requests."""
+
+        normalized = " ".join(command.strip().split())
+        if not cls.is_image_generation_request(normalized):
+            return None
+
+        intent = re.search(
+            r"\b(?:generate|create|make|draw|design|render)\b",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        visual = re.search(
+            r"\b(?:image|picture|photo|poster|wallpaper|illustration|artwork|visual|logo)\b",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        if not intent or not visual:
+            return None
+
+        prompt = normalized[intent.end():].strip(" ,:-")
+        prompt = re.sub(
+            r"^(?:me\s+)?(?:an?|the)\s+",
+            "",
+            prompt,
+            count=1,
+            flags=re.IGNORECASE,
+        ).strip()
+        if not prompt:
+            return None
+
+        aspect_ratio = "1:1"
+        ratio_match = re.search(r"\b(21:9|16:9|9:16|5:4|4:5|4:3|3:4|3:2|2:3|1:1)\b", normalized)
+        if ratio_match:
+            aspect_ratio = ratio_match.group(1)
+        elif re.search(r"\bportrait\b", normalized, re.IGNORECASE):
+            aspect_ratio = "9:16"
+        elif re.search(r"\blandscape|widescreen\b", normalized, re.IGNORECASE):
+            aspect_ratio = "16:9"
+        elif re.search(r"\bsquare\b", normalized, re.IGNORECASE):
+            aspect_ratio = "1:1"
+
+        size_match = re.search(r"\b(1K|2K|4K)\b", normalized, re.IGNORECASE)
+        image_size = size_match.group(1).upper() if size_match else "1K"
+
+        return TaskPlan(
+            goal="Generate an image",
+            steps=[
+                TaskStep(
+                    device="laptop",
+                    tool="images",
+                    args={
+                        "action": "generate_image",
+                        "prompt": prompt,
+                        "aspect_ratio": aspect_ratio,
+                        "image_size": image_size,
+                    },
+                    description="Generate and save the requested image.",
+                )
+            ],
+            message="",
         )
 
     @classmethod
